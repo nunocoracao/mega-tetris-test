@@ -4,7 +4,8 @@ A cheerful, fast-loading falling-block puzzle game that lives entirely in the
 browser — a tiny arcade cabinet at a URL. No backend, no accounts, no build
 server: just static files.
 
-The game is playable: `npm run dev`, then press Play and use the arrow keys.
+The game is playable: `npm run dev`, then press Play and use the arrow keys — or
+open it on a phone and drag, tap and flick.
 
 ## Tech
 
@@ -104,7 +105,8 @@ job and holds no rules of its own:
 | ------------- | --------------------------------------------------------------------- |
 | `renderer.ts` | Paints a `GameState` onto a canvas: well, stack, ghost, active piece.  |
 | `palette.ts`  | Reads the CSS custom properties and derives each block's shading.      |
-| `input.ts`    | Keyboard bindings and DAS/ARR auto-repeat, exported as data.           |
+| `input.ts`    | Keyboard bindings, and the auto-repeat clock every held control shares. |
+| `touch.ts`    | Gesture recogniser, on-screen pad, pad setting, haptics.               |
 | `loop.ts`     | `requestAnimationFrame` timing, delta clamping, pause when hidden.     |
 | `shell.ts`    | Builds the DOM: canvases, readouts, overlay, buttons, live region.     |
 | `hud.ts`      | Score/level/lines, overlay copy, screen-reader announcements.          |
@@ -156,3 +158,53 @@ more` brightens the palette in both the chrome and the canvas.
 Left and right auto-repeat after a 170 ms delay, then every 40 ms. The bindings
 live in `KEY_BINDINGS` in `src/ui/input.ts` and the on-screen controls list is
 generated from that table, so the two cannot drift apart.
+
+## Touch
+
+The game is fully playable with a thumb. There are two ways to play, and both
+produce exactly the same actions the keyboard does — `src/main.ts` has one
+`dispatch`, and gestures, buttons and keys all arrive there.
+
+### Gestures, over the well
+
+| Gesture                            | Action                     |
+| ---------------------------------- | -------------------------- |
+| Drag sideways                      | One column per step, continuously |
+| Drag down                          | Soft drop, one row per step |
+| Fast flick down                    | Hard drop                  |
+| Tap                                | Rotate right               |
+| Tap in the left fifth of the well  | Rotate left                |
+| Two-finger tap                     | Rotate left                |
+| Swipe up                           | Hold                       |
+
+Every threshold is a multiple of the **rendered cell size** rather than a pixel
+count, so the same gesture feels the same on a 320 px phone and a tablet. The
+constants — and one line of reasoning each — are at the top of
+`src/ui/touch.ts`. The recogniser itself is a pure module: it takes plain
+`{pointerId, x, y, timeMs}` records and returns actions, which is why the feel
+of the gestures can be unit-tested rather than only waved at.
+
+### The on-screen pad
+
+Seven real `<button>` elements with accessible names and 44 px minimum targets:
+hold, both rotations, hard drop, left, soft drop, right. Left, right and soft
+drop auto-repeat while held, driven by the same `createAutoRepeat` clock the
+keyboard uses — a held ◀ and a held arrow key are literally the same code.
+
+The pad shows on touch-capable or narrow screens by default. The **Touchpad**
+button cycles auto → on → off and the choice is remembered in `localStorage`
+under `mega-tetris:touch-pad`. With the pad up, the readouts fold from two rails
+into one strip across the top of the well so the field keeps its height, and the
+keyboard help — no use to a thumb — steps aside.
+
+Pointer Events throughout, one primary pointer for gestures, so a second finger
+on the pad never disturbs a drag in progress. `touch-action: none` on the page
+and the play surface means nothing scrolls, pinch-zooms or pulls to refresh
+while playing; `touch-action: manipulation` on the controls keeps taps instant
+without giving double-tap zoom back. Locks and line clears get a short
+`navigator.vibrate` where the device supports it, silenced by
+`prefers-reduced-motion`.
+
+Verified with touch emulation at 390x664, 412x823, 320x568, 812x375 (landscape)
+and 768x1024: every gesture and button lands the right action, nothing scrolls,
+no target is under 44 px, and the setting survives a reload.

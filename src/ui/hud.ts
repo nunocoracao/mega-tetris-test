@@ -25,16 +25,29 @@ export interface OverlayContent {
   readonly button: string;
 }
 
-export function overlayContent(state: GameState): OverlayContent | null {
+/**
+ * The overlay is also the game's help panel, so it says what to *do* — and on
+ * a phone that is a different sentence. `touch` is the one bit of presentation
+ * state the copy needs; everything else it can read off the snapshot.
+ */
+export function overlayContent(state: GameState, touch = false): OverlayContent | null {
   switch (state.status) {
     case 'ready':
       return {
         title: 'Ready?',
-        hint: 'Arrows to move and rotate, space to drop.',
+        hint: touch
+          ? 'Drag to slide, tap to spin, flick down to drop, swipe up to hold.'
+          : 'Arrows to move and rotate, space to drop.',
         button: 'Play',
       };
     case 'paused':
-      return { title: 'Paused', hint: 'Press P or Esc to pick up where you left off.', button: 'Resume' };
+      return {
+        title: 'Paused',
+        hint: touch
+          ? 'Tap Resume to pick up where you left off.'
+          : 'Press P or Esc to pick up where you left off.',
+        button: 'Resume',
+      };
     case 'over':
       return {
         title: 'Game over',
@@ -84,7 +97,7 @@ export function describeEvent(event: GameEvent): string | null {
 
 export interface Hud {
   /** Push the state into the DOM. Cheap to call every frame. */
-  render(state: GameState): void;
+  render(state: GameState, touch?: boolean): void;
   /** Say something in the live region. */
   announce(message: string): void;
 }
@@ -100,13 +113,13 @@ export function createHud(shell: Shell): Hud {
   let lastStatus: GameState['status'] | null = null;
 
   return {
-    render(state: GameState): void {
+    render(state: GameState, touch = false): void {
       setText(shell.score, formatNumber(state.score));
       setText(shell.level, formatNumber(state.level));
       setText(shell.lines, formatNumber(state.lines));
       setText(shell.playButton, playButtonLabel(state));
 
-      const overlay = overlayContent(state);
+      const overlay = overlayContent(state, touch);
       if (overlay === null) {
         shell.overlay.hidden = true;
       } else {

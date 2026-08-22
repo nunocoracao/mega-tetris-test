@@ -17,6 +17,7 @@ import { createLoop } from './ui/loop';
 import { refreshPalette, watchPalette } from './ui/palette';
 import { createBoardRenderer, createPiecePanelRenderer } from './ui/renderer';
 import { createShell } from './ui/shell';
+import { createHaptics, createTouchControls } from './ui/touch';
 
 /** How many upcoming pieces the preview shows. */
 const PREVIEW_COUNT = 3;
@@ -54,13 +55,23 @@ function draw(): void {
   board.render(state);
   next.render({ kinds: state.next.slice(0, PREVIEW_COUNT) });
   hold.render({ kinds: [state.hold], dimmed: state.holdLocked });
-  hud.render(state);
+  // The overlay doubles as the help text, so it needs to know which controls
+  // the player actually has in front of them.
+  hud.render(state, touch.touchLikely());
 }
 
 /** Take the new snapshot and say anything worth saying about how we got here. */
 function setState(nextState: GameState): void {
   state = nextState;
   for (const event of state.events) {
+    // Two events are worth feeling as well as seeing. Everything else would be
+    // noise in the hand, so the phone stays still for it.
+    if (event.type === 'lock') {
+      haptics.lock();
+    } else if (event.type === 'rowsCleared') {
+      haptics.clear();
+    }
+
     const message = describeEvent(event);
     if (message !== null) {
       hud.announce(message);
@@ -103,9 +114,31 @@ function dispatch(action: ActionId): void {
 
 const input = createKeyboardInput({ onAction: dispatch });
 
+const haptics = createHaptics();
+
+/**
+ * Touch is a second input path, not a second game: gestures and pad buttons
+ * arrive as the same `ActionId`s the keyboard produces and go through the same
+ * `dispatch`, so there is exactly one place that turns an intent into a move.
+ */
+const touch = createTouchControls({
+  surface: shell.playfield,
+  boardCanvas: shell.boardCanvas,
+  pad: shell.touchPad,
+  padToggle: shell.padToggle,
+  onAction: dispatch,
+  onPreferenceChange(preference, visible) {
+    hud.announce(
+      `On-screen controls ${preference === 'auto' ? 'set to automatic' : preference}, currently ${visible ? 'shown' : 'hidden'}.`,
+    );
+    draw();
+  },
+});
+
 const loop = createLoop({
   onFrame(deltaMs) {
     input.update(deltaMs);
+    touch.update(deltaMs);
     setState(update(state, deltaMs));
     draw();
   },
@@ -132,6 +165,7 @@ shell.restartButton.addEventListener('click', startFreshGame);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     input.releaseAll();
+    touch.releaseAll();
     if (state.status === 'playing') {
       send({ type: 'pause' });
       draw();

@@ -12,6 +12,7 @@
  */
 
 import { KEY_BINDINGS, describeBinding } from './input';
+import { TOUCH_PAD_BUTTONS } from './touch';
 
 export interface Shell {
   /** Focusable wrapper around the playfield — the game's keyboard home. */
@@ -28,6 +29,10 @@ export interface Shell {
   readonly overlayButton: HTMLButtonElement;
   readonly playButton: HTMLButtonElement;
   readonly restartButton: HTMLButtonElement;
+  /** The on-screen control pad. Hidden or shown by `ui/touch.ts`. */
+  readonly touchPad: HTMLElement;
+  /** Cycles the pad between auto, forced on and forced off. */
+  readonly padToggle: HTMLButtonElement;
   /** `aria-live="polite"` region for pauses, level ups and game over. */
   readonly status: HTMLElement;
 }
@@ -49,6 +54,26 @@ function controlsMarkup(): string {
          <dt class="controls__keys">${describeBinding(binding)}</dt>
          <dd class="controls__label">${binding.label}</dd>
        </div>`,
+  ).join('');
+}
+
+/**
+ * The touch pad, generated from `TOUCH_PAD_BUTTONS`.
+ *
+ * Real buttons with real accessible names: the glyph on the cap is hidden from
+ * assistive technology and the `aria-label` carries the meaning, so "Rotate
+ * left" is what gets announced rather than an arrow nobody can pronounce. The
+ * `--slot` modifier is the only thing the stylesheet needs to place them.
+ */
+function padMarkup(): string {
+  return TOUCH_PAD_BUTTONS.map(
+    (button) =>
+      `<button
+         type="button"
+         class="pad__button pad__button--${button.slot}"
+         data-pad-action="${button.action}"
+         aria-label="${button.label}"
+       ><span class="pad__glyph" aria-hidden="true">${button.glyph}</span></button>`,
   ).join('');
 }
 
@@ -83,7 +108,7 @@ export function createShell(root: HTMLElement): Shell {
           </section>
         </aside>
 
-        <div class="playfield" tabindex="0" role="application" aria-label="Playfield. Use the arrow keys to move and rotate." data-playfield>
+        <div class="playfield" tabindex="0" role="application" aria-label="Playfield. Use the arrow keys, or drag and tap, to move and rotate." data-playfield>
           <canvas class="playfield__canvas" data-board aria-hidden="true"></canvas>
           <div class="overlay" data-overlay hidden>
             <p class="overlay__title" data-overlay-title></p>
@@ -108,7 +133,12 @@ export function createShell(root: HTMLElement): Shell {
       <div class="game__actions">
         <button type="button" class="button button--primary" data-play>Play</button>
         <button type="button" class="button" data-restart>Restart</button>
+        <button type="button" class="button button--quiet" data-pad-toggle>Touchpad: Auto</button>
       </div>
+
+      <section class="pad" aria-label="On-screen controls" data-pad hidden>
+        ${padMarkup()}
+      </section>
 
       <p class="visually-hidden" role="status" aria-live="polite" data-status></p>
     </div>
@@ -128,6 +158,8 @@ export function createShell(root: HTMLElement): Shell {
     overlayButton: must<HTMLButtonElement>(root, '[data-overlay-button]'),
     playButton: must<HTMLButtonElement>(root, '[data-play]'),
     restartButton: must<HTMLButtonElement>(root, '[data-restart]'),
+    touchPad: must<HTMLElement>(root, '[data-pad]'),
+    padToggle: must<HTMLButtonElement>(root, '[data-pad-toggle]'),
     status: must<HTMLElement>(root, '[data-status]'),
   };
 }

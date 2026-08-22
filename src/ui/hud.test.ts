@@ -27,6 +27,16 @@ describe('overlayContent', () => {
   it('gets out of the way while playing', () => {
     expect(overlayContent(playing)).toBeNull();
   });
+
+  it('tells a touch player about gestures rather than about keys', () => {
+    expect(overlayContent(ready, true)?.hint).toMatch(/drag/i);
+    expect(overlayContent(ready, true)?.hint).not.toMatch(/arrow/i);
+    expect(overlayContent(paused, true)?.hint).not.toMatch(/press/i);
+
+    // Everything else reads the same whichever controls are in front of them.
+    expect(overlayContent(over, true)?.hint).toBe(overlayContent(over)?.hint);
+    expect(overlayContent(playing, true)).toBeNull();
+  });
 });
 
 describe('playButtonLabel', () => {

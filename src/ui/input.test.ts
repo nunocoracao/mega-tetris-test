@@ -5,6 +5,8 @@ import {
   DAS_DELAY_MS,
   FRESH_REPEAT,
   KEY_BINDINGS,
+  SOFT_DROP_INTERVAL_MS,
+  createAutoRepeat,
   describeBinding,
   findBinding,
   formatKeyLabel,
@@ -149,5 +151,90 @@ describe('auto-repeat timing', () => {
     expect(das(FRESH_REPEAT, 0).repeats).toBe(0);
     expect(das(FRESH_REPEAT, -50).state).toBe(FRESH_REPEAT);
     expect(das(FRESH_REPEAT, Number.NaN).state).toBe(FRESH_REPEAT);
+  });
+});
+
+/**
+ * The keyboard and the on-screen pad both drive this object, which is the point
+ * of it: a held ◀ button has to behave exactly like a held arrow key, and the
+ * only way to guarantee that is for there to be one implementation of "held".
+ */
+describe('the shared auto-repeat clock', () => {
+  function recorder() {
+    const emitted: ActionId[] = [];
+    return { emitted, repeat: createAutoRepeat((action) => emitted.push(action)) };
+  }
+
+  it('fires once on press and refuses to double-count a held control', () => {
+    const { emitted, repeat } = recorder();
+
+    expect(repeat.press('moveLeft')).toBe(true);
+    expect(repeat.press('moveLeft')).toBe(false);
+    expect(emitted).toEqual(['moveLeft']);
+    expect(repeat.isHeld('moveLeft')).toBe(true);
+  });
+
+  it('charges DAS before it streams', () => {
+    const { emitted, repeat } = recorder();
+    repeat.press('moveRight');
+
+    repeat.update(DAS_DELAY_MS - 1);
+    expect(emitted).toEqual(['moveRight']);
+
+    repeat.update(1 + ARR_INTERVAL_MS * 2);
+    expect(emitted).toEqual(['moveRight', 'moveRight', 'moveRight', 'moveRight']);
+  });
+
+  it('stops the moment the control is released', () => {
+    const { emitted, repeat } = recorder();
+    repeat.press('moveLeft');
+    repeat.release('moveLeft');
+    repeat.update(DAS_DELAY_MS + ARR_INTERVAL_MS * 10);
+
+    expect(emitted).toEqual(['moveLeft']);
+  });
+
+  it('hands over to the other direction with a fresh charge', () => {
+    const { emitted, repeat } = recorder();
+    repeat.press('moveLeft');
+    repeat.press('moveRight');
+    repeat.update(DAS_DELAY_MS);
+    expect(emitted).toEqual(['moveLeft', 'moveRight', 'moveRight']);
+
+    // Letting go of right falls back to left, which has to charge again rather
+    // than inheriting right's momentum and warping across the well.
+    repeat.release('moveRight');
+    repeat.update(DAS_DELAY_MS - 1);
+    expect(emitted).toHaveLength(3);
+    repeat.update(1);
+    expect(emitted[emitted.length - 1]).toBe('moveLeft');
+  });
+
+  it('repeats soft drop on its own steadier rate', () => {
+    const { emitted, repeat } = recorder();
+    repeat.press('softDrop');
+    repeat.update(SOFT_DROP_INTERVAL_MS * 3);
+
+    expect(emitted).toEqual(['softDrop', 'softDrop', 'softDrop', 'softDrop']);
+  });
+
+  it('leaves one-shot actions alone however long they are held', () => {
+    const { emitted, repeat } = recorder();
+    repeat.press('hardDrop');
+    repeat.press('rotateCW');
+    repeat.update(2000);
+
+    expect(emitted).toEqual(['hardDrop', 'rotateCW']);
+  });
+
+  it('forgets everything when the game looks away', () => {
+    const { emitted, repeat } = recorder();
+    repeat.press('moveLeft');
+    repeat.press('softDrop');
+    repeat.releaseAll();
+    repeat.update(1000);
+
+    expect(emitted).toEqual(['moveLeft', 'softDrop']);
+    expect(repeat.isHeld('moveLeft')).toBe(false);
   });
 });
