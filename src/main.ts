@@ -17,7 +17,11 @@ import './style.css';
 
 import { applyInput, createGame, update, type GameInput, type GameState } from './engine';
 import { createGameAudio } from './ui/audio';
+import { createContrastPreference, setHighContrast } from './ui/contrast';
+import { createCountdown } from './ui/countdown';
+import { createModal } from './ui/dialog';
 import { createEffects } from './ui/effects';
+import { hasSeenHelp, markHelpSeen } from './ui/help';
 import { createHud, describeEvent } from './ui/hud';
 import { createKeyboardInput, type ActionId } from './ui/input';
 import { createLoop } from './ui/loop';
@@ -67,6 +71,19 @@ const motion = createMotionPreference({
   },
 });
 
+/**
+ * How much contrast the player wants, from the operating system and from the
+ * cabinet's own toggle. The stylesheet swaps to a brighter palette, and the
+ * canvas thickens every block outline and stamps each piece kind with its own
+ * mark — so two pieces are never told apart by colour alone.
+ */
+const contrast = createContrastPreference({
+  onChange: () => {
+    applyContrast();
+    draw();
+  },
+});
+
 const effects = createEffects({ reducedMotion: () => motion.reduced() });
 
 const audio = createGameAudio();
@@ -90,7 +107,14 @@ function draw(): void {
   hold.render({ kinds: [state.hold], dimmed: state.holdLocked });
   // The overlay doubles as the help text, so it needs to know which controls
   // the player actually has in front of them.
-  hud.render(state, { touch: touch.touchLikely(), score: effects.displayScore() });
+  hud.render(state, {
+    touch: touch.touchLikely(),
+    score: effects.displayScore(),
+    countdown: countdown.digit(),
+    // A dialog is the conversation while it is open; two "Paused" panels
+    // stacked on top of each other is one too many.
+    suppressOverlay: pauseMenu.isOpen() || helpPanel.isOpen(),
+  });
 }
 
 /** Take the new snapshot and say anything worth saying about how we got here. */
@@ -144,6 +168,10 @@ function send(input: GameInput): void {
 /** Abandon this run and deal a brand-new one, already in play. */
 function startFreshGame(): void {
   effects.clear();
+  countdown.cancel();
+  // A restart is not a resume: whatever menu asked for it should close without
+  // counting the player back into a game that no longer exists.
+  closeMenus();
   setState(createGame({ seed: newSeed() }));
   send({ type: 'resume' });
   draw();
@@ -188,19 +216,30 @@ function soundForAction(action: ActionId, before: GameState, after: GameState): 
 }
 
 /**
- * Resolve the two intents the keyboard deliberately leaves open, and pass the
- * rest straight through. Whether "pause" means pause or resume depends on the
- * status, and a restart after a game over should deal a new sequence rather
- * than replay the old seed — both are UI policy, not game rules.
+ * Resolve the intents the keyboard deliberately leaves open, and pass the rest
+ * straight through. Whether "pause" means pause or resume depends on the
+ * status, a restart after a game over should deal a new sequence rather than
+ * replay the old seed, and "help" is not a game input at all — all three are
+ * UI policy, not game rules.
  */
 function dispatch(action: ActionId): void {
+  // While a dialog owns the screen, the game behind it is `inert` and the
+  // keyboard layer treats every key inside a dialog as the dialog's. This is
+  // the belt to those braces rather than the only guard.
+  if (menusOpen()) {
+    return;
+  }
+
   const before = state;
   switch (action) {
     case 'togglePause':
-      send({ type: state.status === 'playing' ? 'pause' : 'resume' });
+      togglePause();
       break;
     case 'restart':
       startFreshGame();
+      break;
+    case 'help':
+      toggleHelp();
       break;
     default:
       send({ type: action });
@@ -233,10 +272,129 @@ const touch = createTouchControls({
   },
 });
 
+// -- dialogs, and the way back into the game --------------------------------
+
+/**
+ * Three, two, one.
+ *
+ * A pause menu that drops the player straight back onto a falling piece is a
+ * pause menu that costs them the run. The count is driven by the loop's real
+ * delta rather than a timer, so it stops with the tab and cannot get ahead of
+ * the frame it is drawn on.
+ */
+const countdown = createCountdown({
+  onFinish() {
+    send({ type: 'resume' });
+    draw();
+    shell.playfield.focus();
+  },
+});
+
+/**
+ * Set while a menu is closing for a reason that is *not* "carry on playing" —
+ * a restart, or stepping sideways into the help panel. Without it, every close
+ * would start a countdown into a game the player did not ask to resume.
+ */
+let resumeOnMenuClose = true;
+
+/** Run after the help panel closes: how it hands control back to the pause menu. */
+let afterHelp: (() => void) | null = null;
+
+const pauseMenu = createModal({
+  element: shell.pauseDialog,
+  background: [...shell.background, shell.helpDialog],
+  initialFocus: () => shell.pauseResume,
+  // Repaint on both edges: opening hides the overlay behind the dialog, and
+  // closing brings back whatever the status now calls for.
+  onOpen: () => draw(),
+  onClose() {
+    if (resumeOnMenuClose && state.status === 'paused') {
+      countdown.start();
+    }
+    resumeOnMenuClose = true;
+    draw();
+  },
+});
+
+const helpPanel = createModal({
+  element: shell.helpDialog,
+  background: [...shell.background, shell.pauseDialog],
+  initialFocus: () => shell.helpPanel,
+  onOpen() {
+    markHelpSeen();
+    draw();
+  },
+  onClose() {
+    const next = afterHelp;
+    afterHelp = null;
+    next?.();
+    draw();
+  },
+});
+
+function menusOpen(): boolean {
+  return pauseMenu.isOpen() || helpPanel.isOpen();
+}
+
+function closeMenus(): void {
+  resumeOnMenuClose = false;
+  afterHelp = null;
+  helpPanel.close();
+  pauseMenu.close();
+  resumeOnMenuClose = true;
+}
+
+/** Pause and show the menu, or close it and count the player back in. */
+function togglePause(): void {
+  if (state.status === 'playing') {
+    send({ type: 'pause' });
+    pauseMenu.open();
+    return;
+  }
+  if (state.status === 'paused') {
+    if (countdown.active()) {
+      // Second thoughts during the count: stop it and put the menu back.
+      countdown.cancel();
+      pauseMenu.open();
+      return;
+    }
+    countdown.start();
+    return;
+  }
+  // 'ready' starts the first game with no ceremony; 'over' has nothing to
+  // resume, and the engine ignores the input.
+  send({ type: 'resume' });
+}
+
+function toggleHelp(): void {
+  if (helpPanel.isOpen()) {
+    helpPanel.close();
+  } else {
+    helpPanel.open();
+  }
+}
+
+shell.helpButton.addEventListener('click', () => helpPanel.open());
+shell.helpClose.addEventListener('click', () => helpPanel.close());
+shell.helpDone.addEventListener('click', () => helpPanel.close());
+
+shell.pauseResume.addEventListener('click', () => pauseMenu.close());
+shell.pauseClose.addEventListener('click', () => pauseMenu.close());
+shell.pauseRestart.addEventListener('click', startFreshGame);
+shell.pauseHelp.addEventListener('click', () => {
+  // Step sideways rather than stacking one modal on another: the pause menu
+  // steps out, help takes over, and the pause menu comes back when it is done.
+  resumeOnMenuClose = false;
+  pauseMenu.close();
+  afterHelp = () => pauseMenu.open();
+  helpPanel.open();
+});
+
 const loop = createLoop({
   onFrame(deltaMs) {
     input.update(deltaMs);
     touch.update(deltaMs);
+    countdown.update(deltaMs);
     setState(update(state, deltaMs));
     // After the state, so the score count-up is always chasing a current
     // target, and with the same delta the engine got.
@@ -252,7 +410,10 @@ function primaryAction(): void {
     return;
   }
   dispatch('togglePause');
-  shell.playfield.focus();
+  // Unless that opened the pause menu — which now owns focus, and must keep it.
+  if (!menusOpen()) {
+    shell.playfield.focus();
+  }
 }
 
 // -- settings ---------------------------------------------------------------
@@ -270,6 +431,25 @@ function applyMotion(): void {
 function applySound(): void {
   shell.soundToggle.textContent = `Sound: ${audio.muted() ? 'Off' : 'On'}`;
   shell.soundToggle.title = audio.muted() ? 'Sound is off. Tap to turn it on.' : 'Sound is on. Tap to mute.';
+}
+
+/**
+ * Publish the contrast decision to the stylesheet *and* to the canvas.
+ *
+ * Order matters: the root attribute is what swaps the CSS palette, so the
+ * custom properties have to be re-read afterwards or the blocks would keep
+ * painting in the old colours.
+ */
+function applyContrast(): void {
+  const high = contrast.high();
+  document.documentElement.dataset['contrast'] = high ? 'on' : 'off';
+  setHighContrast(high);
+  refreshPalette();
+  shell.contrastToggle.textContent = `Contrast: ${contrast.label()}`;
+  shell.contrastToggle.title =
+    contrast.setting() === 'auto'
+      ? 'Contrast follows your system’s setting. Tap to override.'
+      : `Contrast forced to ${contrast.label().toLowerCase()}. Tap to change.`;
 }
 
 shell.motionToggle.addEventListener('click', () => {
@@ -290,6 +470,17 @@ shell.soundToggle.addEventListener('click', () => {
   hud.announce(muted ? 'Sound off.' : 'Sound on.');
 });
 
+shell.contrastToggle.addEventListener('click', () => {
+  const setting = contrast.cycle();
+  applyContrast();
+  hud.announce(
+    setting === 'auto'
+      ? 'Contrast follows your system setting.'
+      : `Contrast set to ${contrast.label().toLowerCase()}.`,
+  );
+  draw();
+});
+
 watchPalette(() => draw());
 
 shell.playButton.addEventListener('click', primaryAction);
@@ -302,6 +493,9 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     input.releaseAll();
     touch.releaseAll();
+    // A count that resumed the game while nobody was looking would be worse
+    // than no count at all.
+    countdown.cancel();
     if (state.status === 'playing') {
       send({ type: 'pause' });
       draw();
@@ -311,9 +505,18 @@ document.addEventListener('visibilitychange', () => {
 
 applyMotion();
 applySound();
+applyContrast();
 loop.start();
 draw();
-shell.overlayButton.focus();
+
+// A player who has never been here before gets the controls without having to
+// go looking for them. Everyone else lands on the Play button.
+if (hasSeenHelp()) {
+  shell.overlayButton.focus();
+} else {
+  helpPanel.open();
+}
+draw();
 
 if (import.meta.env.DEV) {
   // A window on the current snapshot, for the dev console and for automated
@@ -322,5 +525,13 @@ if (import.meta.env.DEV) {
     state: () => state,
     effects: () => ({ particles: effects.particleCount(), score: effects.displayScore() }),
     reducedMotion: () => motion.reduced(),
+    highContrast: () => contrast.high(),
+    menus: () => ({
+      pause: pauseMenu.isOpen(),
+      help: helpPanel.isOpen(),
+      countdown: countdown.digit(),
+    }),
+    openHelp: () => helpPanel.open(),
+    closeMenus,
   });
 }

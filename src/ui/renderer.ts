@@ -24,6 +24,7 @@ import {
   type PieceKind,
   type Rotation,
 } from '../engine';
+import { blockMark, highContrast, type BlockMark } from './contrast';
 import { GHOST_ALPHA, GRID_ALPHA, getPalette, withAlpha, type BlockColor } from './palette';
 
 /**
@@ -207,12 +208,87 @@ function roundedRectPath(
 }
 
 /**
+ * The mark stamped into a block's face in high-contrast mode.
+ *
+ * Colour alone must not be what tells an S from a Z, so each kind carries a
+ * shape as well. Two strokes at most, drawn in the block's own near-black
+ * outline colour so it reads against every one of the seven faces.
+ */
+function drawMark(
+  ctx: CanvasRenderingContext2D,
+  mark: BlockMark,
+  left: number,
+  top: number,
+  side: number,
+  color: BlockColor,
+): void {
+  // Below about eight device pixels a mark is mud, and the heavier outline is
+  // already carrying the distinction. Bail rather than smear.
+  if (side < 8) {
+    return;
+  }
+  const inset = side * 0.28;
+  const a = left + inset;
+  const b = left + side - inset;
+  const c = top + inset;
+  const d = top + side - inset;
+  const midX = left + side / 2;
+  const midY = top + side / 2;
+
+  ctx.save();
+  ctx.strokeStyle = color.outline;
+  ctx.lineWidth = Math.max(1, Math.round(side * 0.14));
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  switch (mark) {
+    case 'bar':
+      ctx.moveTo(a, midY);
+      ctx.lineTo(b, midY);
+      break;
+    case 'pillar':
+      ctx.moveTo(midX, c);
+      ctx.lineTo(midX, d);
+      break;
+    case 'cross':
+      ctx.moveTo(a, midY);
+      ctx.lineTo(b, midY);
+      ctx.moveTo(midX, c);
+      ctx.lineTo(midX, d);
+      break;
+    case 'slashUp':
+      ctx.moveTo(a, d);
+      ctx.lineTo(b, c);
+      break;
+    case 'slashDown':
+      ctx.moveTo(a, c);
+      ctx.lineTo(b, d);
+      break;
+    case 'stack':
+      ctx.moveTo(a, midY - side * 0.15);
+      ctx.lineTo(b, midY - side * 0.15);
+      ctx.moveTo(a, midY + side * 0.15);
+      ctx.lineTo(b, midY + side * 0.15);
+      break;
+    case 'ring':
+      ctx.rect(a, c, b - a, d - c);
+      break;
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
  * A solid block, lit from above.
  *
  * All of the dimension is arithmetic, not artwork: a flat face, a lit band
  * across the top, a shaded band across the bottom, a hairline inner highlight
  * just inside the top edge and a darker outline around the whole thing. Four
  * clipped rectangles and two strokes — cheap enough to do 220 times a frame.
+ *
+ * In high-contrast mode the outline roughly doubles in weight and darkens to
+ * the block's `outline` tone, and the piece's mark is stamped into the face.
+ * That is two non-colour cues — boundary weight and shape — on top of the
+ * brighter palette the stylesheet switches to.
  */
 function drawBlock(
   ctx: CanvasRenderingContext2D,
@@ -220,6 +296,7 @@ function drawBlock(
   y: number,
   size: number,
   color: BlockColor,
+  kind?: PieceKind,
 ): void {
   const inset = Math.max(1, Math.round(size * 0.06));
   const left = x + inset;
@@ -230,6 +307,7 @@ function drawBlock(
   }
   const radius = Math.max(1, Math.round(size * 0.2));
   const band = Math.max(1, Math.round(side * 0.26));
+  const bold = highContrast();
 
   roundedRectPath(ctx, left, top, side, side, radius);
   ctx.fillStyle = color.fill;
@@ -247,7 +325,9 @@ function drawBlock(
   ctx.restore();
 
   // Inner highlight, then the darker edge over it, so the two never overlap.
-  if (side > 6) {
+  // High contrast skips the highlight: it would only soften the boundary the
+  // heavy outline is about to draw.
+  if (side > 6 && !bold) {
     const line = Math.max(1, Math.round(size * 0.04));
     ctx.strokeStyle = withAlpha(color.light, 0.4);
     ctx.lineWidth = line;
@@ -255,8 +335,12 @@ function drawBlock(
     ctx.stroke();
   }
 
-  ctx.strokeStyle = color.shade;
-  ctx.lineWidth = Math.max(1, Math.round(size * 0.05));
+  if (bold && kind !== undefined) {
+    drawMark(ctx, blockMark(kind), left, top, side, color);
+  }
+
+  ctx.strokeStyle = bold ? color.outline : color.shade;
+  ctx.lineWidth = Math.max(bold ? 2 : 1, Math.round(size * (bold ? 0.1 : 0.05)));
   roundedRectPath(ctx, left, top, side, side, radius);
   ctx.stroke();
 }
@@ -281,8 +365,11 @@ function drawGhostBlock(
   roundedRectPath(ctx, left, top, side, side, radius);
   ctx.fillStyle = withAlpha(color.fill, GHOST_ALPHA.fill);
   ctx.fill();
-  ctx.strokeStyle = withAlpha(color.fill, GHOST_ALPHA.stroke);
-  ctx.lineWidth = Math.max(1, Math.round(size * 0.07));
+  // In high contrast the ghost keeps a full-strength outline and gives up the
+  // fill instead — "where it would land" then reads as a shape, not as a shade.
+  const bold = highContrast();
+  ctx.strokeStyle = withAlpha(color.fill, bold ? 1 : GHOST_ALPHA.stroke);
+  ctx.lineWidth = Math.max(1, Math.round(size * (bold ? 0.1 : 0.07)));
   ctx.stroke();
 }
 
@@ -425,7 +512,7 @@ export function createBoardRenderer(
           ctx.scale(1, 1 - squash);
           ctx.translate(0, -floor);
         }
-        drawBlock(ctx, blockX, blockY, layout.cell, pieces[cell]);
+        drawBlock(ctx, blockX, blockY, layout.cell, pieces[cell], cell);
         if (squash > 0) {
           ctx.restore();
         }
@@ -485,6 +572,7 @@ type BlockPainter = (
   y: number,
   size: number,
   color: BlockColor,
+  kind?: PieceKind,
 ) => void;
 
 /**
@@ -513,6 +601,7 @@ function drawPiece(
       layout.y + row * layout.cell,
       layout.cell,
       color,
+      piece.kind,
     );
   }
   ctx.globalAlpha = 1;
@@ -628,6 +717,7 @@ function drawThumbnail(
       boxY + layout.y + (offset.y - extents.minY) * layout.cell,
       layout.cell,
       color,
+      kind,
     );
   }
 }

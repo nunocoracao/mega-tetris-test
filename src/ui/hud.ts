@@ -8,7 +8,7 @@
  * 60Hz render loop does not rewrite identical text sixty times a second.
  */
 
-import type { GameEvent, GameState } from '../engine';
+import { VISIBLE_HEIGHT, type GameEvent, type GameState } from '../engine';
 import type { Shell } from './shell';
 
 /** Thousands separators, without dragging in locale differences. */
@@ -75,7 +75,12 @@ export function playButtonLabel(state: GameState): string {
 
 /**
  * An event as a sentence, or `null` for events not worth interrupting for.
- * Locks and spawns happen constantly; scores, levels and endings do not.
+ *
+ * The bar is deliberately high. A live region that speaks on every lock, hold
+ * and spawn is a live region players turn their screen reader off to escape,
+ * so only three things get through: a line clear (with the count), a level up,
+ * and the end of the run. Everything else is background chatter and is read on
+ * demand from the playfield's own description instead.
  */
 export function describeEvent(event: GameEvent): string | null {
   switch (event.type) {
@@ -86,8 +91,6 @@ export function describeEvent(event: GameEvent): string | null {
     }
     case 'levelUp':
       return `Level ${formatNumber(event.level)}.`;
-    case 'hold':
-      return `Held ${event.held}, now playing ${event.active}.`;
     case 'gameOver':
       return `Game over. Final score ${formatNumber(event.score)}, ${formatNumber(event.lines)} lines.`;
     default:
@@ -95,7 +98,92 @@ export function describeEvent(event: GameEvent): string | null {
   }
 }
 
-/** The two things the HUD cannot read off the snapshot. */
+// ---------------------------------------------------------------------------
+// The playfield in words
+// ---------------------------------------------------------------------------
+
+/** How tall the stack is, in rows of the visible well. */
+export function stackHeight(state: GameState): number {
+  const { board } = state;
+  const hidden = Math.max(0, board.height - VISIBLE_HEIGHT);
+  for (let y = hidden; y < board.height; y += 1) {
+    for (let x = 0; x < board.width; x += 1) {
+      if (board.cells[y * board.width + x] != null) {
+        return board.height - y;
+      }
+    }
+  }
+  return 0;
+}
+
+/** `['I', 'O']` → `'I, then O'`; an empty queue reads as "nothing queued". */
+function listPieces(kinds: readonly string[]): string {
+  if (kinds.length === 0) {
+    return 'nothing queued';
+  }
+  return kinds.join(', then ');
+}
+
+/** The next-queue thumbnail canvas, in words. */
+export function describeQueue(state: GameState, previewCount = 3): string {
+  return `Next: ${listPieces(state.next.slice(0, previewCount))}.`;
+}
+
+/** The hold slot, in words — including whether it is spent for this piece. */
+export function describeHold(state: GameState): string {
+  if (state.hold === null) {
+    return 'Hold is empty.';
+  }
+  return state.holdLocked
+    ? `Holding ${state.hold}. Already used this piece.`
+    : `Holding ${state.hold}.`;
+}
+
+/**
+ * The canvas, as a sentence a screen reader can actually use.
+ *
+ * This is the playfield's text alternative — the thing that stops the well
+ * being an opaque box. It is a *summary*, not a running commentary: the height
+ * of the stack, the numbers, what is falling, what is coming and what is held.
+ * Deliberately silent about the active piece's row and column, because a
+ * description that changed on every gravity tick would be unusable — and the
+ * HUD would be announcing it.
+ */
+export function describePlayfield(state: GameState, previewCount = 3): string {
+  const height = stackHeight(state);
+  const stack =
+    height === 0
+      ? 'The well is empty.'
+      : `The stack is ${height} ${height === 1 ? 'row' : 'rows'} high, of ${VISIBLE_HEIGHT}.`;
+
+  const falling =
+    state.active === null ? 'No piece is falling.' : `Falling piece: ${state.active.kind}.`;
+  const next = describeQueue(state, previewCount);
+  const hold = describeHold(state);
+
+  const status =
+    state.status === 'over'
+      ? 'Game over.'
+      : state.status === 'paused'
+        ? 'Paused.'
+        : state.status === 'ready'
+          ? 'Ready to play.'
+          : '';
+
+  return [
+    `Playfield, ${state.board.width} columns wide.`,
+    stack,
+    `Score ${formatNumber(state.score)}, level ${formatNumber(state.level)}, ${formatNumber(state.lines)} lines cleared.`,
+    falling,
+    next,
+    hold,
+    status,
+  ]
+    .filter((part) => part !== '')
+    .join(' ');
+}
+
+/** The things the HUD cannot read off the snapshot. */
 export interface HudView {
   /** Whether the player is on a touch device, which changes the help copy. */
   readonly touch?: boolean;
@@ -105,6 +193,13 @@ export interface HudView {
    * real one.
    */
   readonly score?: number;
+  /** The 3-2-1 digit to show over the well, or `null` when nothing counts. */
+  readonly countdown?: number | null;
+  /**
+   * Keep the overlay down even though the status calls for it — a modal dialog
+   * is covering the well and owns the conversation.
+   */
+  readonly suppressOverlay?: boolean;
 }
 
 export interface Hud {
@@ -124,6 +219,35 @@ function setText(element: HTMLElement, text: string): void {
 export function createHud(shell: Shell): Hud {
   let lastStatus: GameState['status'] | null = null;
 
+  /**
+   * The playfield description is rebuilt only when something it mentions has
+   * changed — not sixty times a second, and pointedly not when the only thing
+   * that moved was the falling piece. `aria-labelledby` is not a live region,
+   * so this is cheap rather than loud, but rebuilding a string per frame is
+   * still waste in a loop that otherwise allocates nothing.
+   */
+  let summarySignature = '';
+
+  function refreshSummary(state: GameState): void {
+    const signature = [
+      state.status,
+      state.score,
+      state.level,
+      state.lines,
+      state.hold ?? '-',
+      state.holdLocked ? 'x' : '-',
+      state.active?.kind ?? '-',
+      state.next.slice(0, 3).join(''),
+    ].join('|');
+    if (signature === summarySignature) {
+      return;
+    }
+    summarySignature = signature;
+    setText(shell.boardSummary, describePlayfield(state));
+    setText(shell.nextText, describeQueue(state));
+    setText(shell.holdText, describeHold(state));
+  }
+
   return {
     render(state: GameState, view: HudView = {}): void {
       const shown = view.score ?? state.score;
@@ -134,8 +258,23 @@ export function createHud(shell: Shell): Hud {
       setText(shell.level, formatNumber(state.level));
       setText(shell.lines, formatNumber(state.lines));
       setText(shell.playButton, playButtonLabel(state));
+      refreshSummary(state);
 
-      const overlay = overlayContent(state, view.touch ?? false);
+      // The 3-2-1 after a pause. `aria-hidden`, because the live region has
+      // already said "Paused" and will say "Resumed" — counting out loud on
+      // top of that is noise.
+      const digit = view.countdown ?? null;
+      if (digit === null) {
+        shell.countdown.hidden = true;
+      } else {
+        setText(shell.countdown, String(digit));
+        shell.countdown.hidden = false;
+      }
+
+      const overlay =
+        view.suppressOverlay === true || digit !== null
+          ? null
+          : overlayContent(state, view.touch ?? false);
       if (overlay === null) {
         shell.overlay.hidden = true;
       } else {
