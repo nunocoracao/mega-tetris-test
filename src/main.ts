@@ -21,14 +21,21 @@ import { createContrastPreference, setHighContrast } from './ui/contrast';
 import { createCountdown } from './ui/countdown';
 import { createModal } from './ui/dialog';
 import { createEffects } from './ui/effects';
-import { hasSeenHelp, markHelpSeen } from './ui/help';
-import { createHud, describeEvent } from './ui/hud';
-import { createKeyboardInput, type ActionId } from './ui/input';
+import {
+  MENU_STATS,
+  createHud,
+  describeEvent,
+  describeRunEnd,
+  menuStatValues,
+} from './ui/hud';
+import { createKeyboardInput, normalizeKey, type ActionId } from './ui/input';
 import { createLoop } from './ui/loop';
 import { createMotionPreference } from './ui/motion';
 import { refreshPalette, watchPalette } from './ui/palette';
 import { createBoardRenderer, createPiecePanelRenderer } from './ui/renderer';
 import { createShell } from './ui/shell';
+import { clampStartLevel, type StatsUpdate } from './ui/stats';
+import { createStore } from './ui/storage';
 import { createHaptics, createTouchControls } from './ui/touch';
 
 /** How many upcoming pieces the preview shows. */
@@ -56,12 +63,22 @@ const shell = createShell(root);
 const hud = createHud(shell);
 
 /**
+ * Everything the cabinet remembers: the settings, and the personal bests.
+ *
+ * Built here and nowhere else. The modules that used to reach into
+ * `localStorage` for one key each are handed the single setting they own, which
+ * is what keeps the storage format in one file and testable.
+ */
+const store = createStore();
+
+/**
  * How much movement the player wants, from the operating system and from the
  * cabinet's own toggle. Both the canvas effects and the CSS transitions read
  * it — the canvas through `effects`, the stylesheet through the root
  * `data-motion` attribute this keeps in sync.
  */
 const motion = createMotionPreference({
+  storage: store.access('motion'),
   onChange: () => {
     applyMotion();
     // Turning motion off mid-burst should be immediate, not "once the shards
@@ -78,6 +95,7 @@ const motion = createMotionPreference({
  * mark — so two pieces are never told apart by colour alone.
  */
 const contrast = createContrastPreference({
+  storage: store.access('contrast'),
   onChange: () => {
     applyContrast();
     draw();
@@ -86,7 +104,7 @@ const contrast = createContrastPreference({
 
 const effects = createEffects({ reducedMotion: () => motion.reduced() });
 
-const audio = createGameAudio();
+const audio = createGameAudio({ storage: store.access('sound') });
 
 const board = createBoardRenderer(shell.boardCanvas, {
   shake: (cell) => effects.shake(cell),
@@ -99,9 +117,28 @@ const next = createPiecePanelRenderer(shell.nextCanvas, {
 });
 const hold = createPiecePanelRenderer(shell.holdCanvas, { slots: 1 });
 
-let state: GameState = createGame({ seed: newSeed() });
+let state: GameState = createGame({
+  seed: newSeed(),
+  startLevel: store.get('startLevel'),
+});
+
+/**
+ * What the last run did to the personal bests, or `null` before the first game
+ * over of this visit. The game-over panel is written from it.
+ */
+let lastResult: StatsUpdate | null = null;
+
+/**
+ * Set when a run has just ended, so the loop can put focus on "Play again" as
+ * soon as the panel is in the DOM. Focus cannot move to it from inside
+ * `setState`: the overlay is still hidden until the next `draw`.
+ */
+let focusPlayAgain = false;
 
 function draw(): void {
+  // The attract screen's drifting pieces belong to the one state that has no
+  // game going on behind the panel.
+  effects.setAttract(state.status === 'ready');
   board.render(state);
   next.render({ kinds: state.next.slice(0, PREVIEW_COUNT) });
   hold.render({ kinds: [state.hold], dimmed: state.holdLocked });
@@ -111,6 +148,9 @@ function draw(): void {
     touch: touch.touchLikely(),
     score: effects.displayScore(),
     countdown: countdown.digit(),
+    stats: store.stats(),
+    result: lastResult,
+    startLevel: store.get('startLevel'),
     // A dialog is the conversation while it is open; two "Paused" panels
     // stacked on top of each other is one too many.
     suppressOverlay: pauseMenu.isOpen() || helpPanel.isOpen(),
@@ -150,11 +190,27 @@ function setState(nextState: GameState): void {
       audio.play('levelUp');
     } else if (event.type === 'gameOver') {
       audio.play('gameOver');
+      // The one moment the stats change. Recording it here — rather than from
+      // the panel that shows it — means a run counts even if the player closes
+      // the tab before the panel finishes fading in.
+      lastResult = store.recordRun({
+        score: event.score,
+        lines: event.lines,
+        level: event.level,
+        startLevel: state.startLevel,
+        durationMs: state.elapsedMs,
+      });
+      focusPlayAgain = true;
     } else if (event.type === 'hold') {
       audio.play('rotate');
     }
 
-    const message = describeEvent(event);
+    // The end of a run is the one event whose sentence depends on more than
+    // the event: "game over" plus what it did to the bests.
+    const message =
+      event.type === 'gameOver' && lastResult !== null
+        ? describeRunEnd(lastResult)
+        : describeEvent(event);
     if (message !== null) {
       hud.announce(message);
     }
@@ -165,14 +221,22 @@ function send(input: GameInput): void {
   setState(applyInput(state, input));
 }
 
-/** Abandon this run and deal a brand-new one, already in play. */
+/**
+ * Abandon this run and deal a brand-new one, already in play.
+ *
+ * This is the whole of "play again": a new snapshot, a repaint, and the
+ * keyboard back on the well. No reload, no rebuilt DOM, nothing to wait for —
+ * which is what makes the loop worth closing.
+ */
 function startFreshGame(): void {
   effects.clear();
   countdown.cancel();
   // A restart is not a resume: whatever menu asked for it should close without
   // counting the player back into a game that no longer exists.
   closeMenus();
-  setState(createGame({ seed: newSeed() }));
+  lastResult = null;
+  focusPlayAgain = false;
+  setState(createGame({ seed: newSeed(), startLevel: store.get('startLevel') }));
   send({ type: 'resume' });
   draw();
   shell.playfield.focus();
@@ -227,6 +291,13 @@ function dispatch(action: ActionId): void {
   // keyboard layer treats every key inside a dialog as the dialog's. This is
   // the belt to those braces rather than the only guard.
   if (menusOpen()) {
+    return;
+  }
+
+  // A finished run is a one-key affair: the two keys that mean "go" both mean
+  // "play again", so nobody has to find the button to get back in.
+  if (state.status === 'over' && (action === 'hardDrop' || action === 'restart')) {
+    startFreshGame();
     return;
   }
 
@@ -306,7 +377,13 @@ const pauseMenu = createModal({
   initialFocus: () => shell.pauseResume,
   // Repaint on both edges: opening hides the overlay behind the dialog, and
   // closing brings back whatever the status now calls for.
-  onOpen: () => draw(),
+  onOpen() {
+    renderMenuStats();
+    // A confirmation left standing from last time is a confirmation nobody
+    // asked for. The menu always opens in its resting state.
+    showResetConfirm(false);
+    draw();
+  },
   onClose() {
     if (resumeOnMenuClose && state.status === 'paused') {
       countdown.start();
@@ -321,7 +398,7 @@ const helpPanel = createModal({
   background: [...shell.background, shell.pauseDialog],
   initialFocus: () => shell.helpPanel,
   onOpen() {
-    markHelpSeen();
+    store.set('seenHelp', true);
     draw();
   },
   onClose() {
@@ -378,6 +455,60 @@ shell.helpButton.addEventListener('click', () => helpPanel.open());
 shell.helpClose.addEventListener('click', () => helpPanel.close());
 shell.helpDone.addEventListener('click', () => helpPanel.close());
 
+// -- personal bests, and erasing them ---------------------------------------
+
+/** Fill the pause menu's list from the store. Cheap, and only on open. */
+function renderMenuStats(): void {
+  const values = menuStatValues(store.stats());
+  for (const { key } of MENU_STATS) {
+    const row = shell.menuStats.querySelector<HTMLElement>(`[data-stat-row="${key}"]`);
+    const cell = shell.menuStats.querySelector<HTMLElement>(`[data-stat="${key}"]`);
+    if (row === null || cell === null) {
+      continue;
+    }
+    const value = values[key];
+    row.hidden = value === null;
+    if (value !== null) {
+      cell.textContent = value;
+    }
+  }
+}
+
+/**
+ * Swap between "Reset stats…" and the confirmation that actually does it.
+ *
+ * Focus follows the swap in both directions, so the keyboard never lands on a
+ * control that has just disappeared — and it lands on *Keep them*, because the
+ * safe answer should be the one a stray Enter picks.
+ */
+function showResetConfirm(show: boolean): void {
+  const changed = shell.statsConfirm.hidden === show;
+  shell.statsConfirm.hidden = !show;
+  shell.statsReset.hidden = show;
+  pauseMenu.refresh();
+  if (!changed) {
+    return;
+  }
+  if (show) {
+    shell.statsConfirmNo.focus();
+  } else if (pauseMenu.isOpen()) {
+    shell.statsReset.focus();
+  }
+}
+
+shell.statsReset.addEventListener('click', () => showResetConfirm(true));
+shell.statsConfirmNo.addEventListener('click', () => showResetConfirm(false));
+shell.statsConfirmYes.addEventListener('click', () => {
+  store.resetStats();
+  // The panel behind the menu is written from the last run, and that run's
+  // comparison is now against nothing.
+  lastResult = null;
+  renderMenuStats();
+  showResetConfirm(false);
+  hud.announce('Personal bests and totals erased.');
+  draw();
+});
+
 shell.pauseResume.addEventListener('click', () => pauseMenu.close());
 shell.pauseClose.addEventListener('click', () => pauseMenu.close());
 shell.pauseRestart.addEventListener('click', startFreshGame);
@@ -400,6 +531,15 @@ const loop = createLoop({
     // target, and with the same delta the engine got.
     effects.update(deltaMs, state.score);
     draw();
+    // Only now is the panel showing, and so focusable. The flag survives frames
+    // rather than being spent on the first one, because a run can end with the
+    // help panel open — and taking focus out of a dialog would be worse than
+    // waiting for it. The stylesheet fades the panel in behind the field sweep;
+    // the focus ring arrives with it.
+    if (focusPlayAgain && !menusOpen()) {
+      focusPlayAgain = false;
+      shell.overlayButton.focus();
+    }
   },
 });
 
@@ -486,6 +626,65 @@ watchPalette(() => draw());
 shell.playButton.addEventListener('click', primaryAction);
 shell.overlayButton.addEventListener('click', primaryAction);
 shell.restartButton.addEventListener('click', startFreshGame);
+shell.overlayHelp.addEventListener('click', () => helpPanel.open());
+
+/**
+ * The start screen's level picker.
+ *
+ * Changing it re-deals the waiting game rather than only remembering a number,
+ * so the level readout and the personal best beside it are already telling the
+ * truth about the run that is about to start. Runs begun above level 1 are
+ * scored on their own ladder — see `ui/stats.ts`.
+ */
+shell.startLevel.addEventListener('change', () => {
+  const level = clampStartLevel(Number(shell.startLevel.value));
+  store.set('startLevel', level);
+  shell.startLevel.value = String(level);
+  if (state.status === 'ready') {
+    setState(createGame({ seed: state.seed, startLevel: level }));
+  }
+  hud.announce(level === 1 ? 'Starting on level 1.' : `Starting on level ${level}.`);
+  draw();
+});
+
+/**
+ * "Play again", from wherever focus happens to be.
+ *
+ * The panel opens with its button focused, so Enter and Space are already the
+ * button's own; and with the well focused, Space and R already arrive as bound
+ * actions. That leaves exactly two gaps, and this fills them: **R while a
+ * control has focus** — the keyboard layer deliberately leaves keys inside
+ * controls alone — and **Enter while the well has it**, where nothing is
+ * listening at all.
+ *
+ * `defaultPrevented` is the seam. The game layer prevents the default of every
+ * key it claims, so a prevented R is one that has already restarted the game
+ * and must not restart it twice.
+ */
+const PLAY_AGAIN_KEYS: ReadonlySet<string> = new Set(['Enter', 'R']);
+
+window.addEventListener('keydown', (event) => {
+  if (state.status !== 'over' || menusOpen() || event.defaultPrevented) {
+    return;
+  }
+  if (event.metaKey || event.altKey || event.ctrlKey) {
+    return;
+  }
+  const key = normalizeKey(event.key);
+  if (!PLAY_AGAIN_KEYS.has(key)) {
+    return;
+  }
+  const active = document.activeElement;
+  const inControl =
+    active instanceof HTMLElement && active.closest('button, a, input, select, textarea') !== null;
+  // Enter on a real control belongs to that control: it is about to be
+  // activated, and a restart underneath it would be one too many.
+  if (key === 'Enter' && inControl) {
+    return;
+  }
+  event.preventDefault();
+  startFreshGame();
+});
 
 // A hidden tab should not keep playing behind the player's back. The loop
 // suspends itself too, but pausing the game is what makes the return honest.
@@ -506,12 +705,15 @@ document.addEventListener('visibilitychange', () => {
 applyMotion();
 applySound();
 applyContrast();
+// The picker is markup; the remembered choice is data. Publish one into the
+// other before the first paint, so the attract screen opens already set.
+shell.startLevel.value = String(store.get('startLevel'));
 loop.start();
 draw();
 
 // A player who has never been here before gets the controls without having to
-// go looking for them. Everyone else lands on the Play button.
-if (hasSeenHelp()) {
+// go looking for them. Everyone else lands on the start screen's Play button.
+if (store.get('seenHelp')) {
   shell.overlayButton.focus();
 } else {
   helpPanel.open();
@@ -533,5 +735,8 @@ if (import.meta.env.DEV) {
     }),
     openHelp: () => helpPanel.open(),
     closeMenus,
+    stats: () => store.stats(),
+    settings: () => store.settings(),
+    result: () => lastResult,
   });
 }

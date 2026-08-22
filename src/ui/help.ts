@@ -11,9 +11,10 @@
  * `ui/touch.ts` codes the *thresholds*, not the sentences, so the sentences
  * live here beside the rest of the copy.
  *
- * Everything above the storage section at the bottom is a pure function of the
- * tables it reads, which is how `help.test.ts` can assert the no-drift property
- * directly.
+ * The whole file is a pure function of the tables it reads, which is how
+ * `help.test.ts` can assert the no-drift property directly. Whether a player has
+ * seen the panel before is a stored *setting*, and lives with the rest of them
+ * in `ui/storage.ts`.
  */
 
 import { HARD_DROP_POINTS, LINE_CLEAR_POINTS, SOFT_DROP_POINTS } from '../engine';
@@ -134,34 +135,4 @@ export function helpBodyMarkup(): string {
     ${section('help-scoring', 'Scoring', scoringRows(), 'help__term')}
     ${section('help-mechanics', 'Hold and ghost', MECHANIC_NOTES, 'help__term')}
   `;
-}
-
-// ---------------------------------------------------------------------------
-// The first visit
-// ---------------------------------------------------------------------------
-
-/**
- * Whether this browser has been shown the help panel before.
- *
- * A player arriving for the first time gets the controls without having to
- * hunt for them; everyone else gets straight to the game. Storage is a nicety
- * rather than a requirement — Safari's private mode throws — and the failure
- * mode is deliberately the friendly one: if we cannot remember, we show it.
- */
-export const HELP_SEEN_KEY = 'mega-tetris:seen-help';
-
-export function hasSeenHelp(): boolean {
-  try {
-    return localStorage.getItem(HELP_SEEN_KEY) === 'yes';
-  } catch {
-    return false;
-  }
-}
-
-export function markHelpSeen(): void {
-  try {
-    localStorage.setItem(HELP_SEEN_KEY, 'yes');
-  } catch {
-    // Storage is off; this player sees the panel again next visit.
-  }
 }

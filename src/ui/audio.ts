@@ -18,7 +18,13 @@
  * one until the player touches something. And a context can be suspended again
  * at any time (tab switches, iOS), so every cue re-checks and asks for a resume
  * rather than assuming.
+ *
+ * The mute is persisted, but not by this file: `ui/storage.ts` owns the one key
+ * the game writes and `src/main.ts` hands over the single setting. The type
+ * import below is erased at build time, so the runtime dependency runs one way.
  */
+
+import type { SettingAccess } from './storage';
 
 /** One oscillator's worth of sound. */
 export interface ToneSpec {
@@ -150,29 +156,6 @@ export function cueDurationMs(cue: SoundCue, rows = 1): number {
 // Stored preference
 // ---------------------------------------------------------------------------
 
-export const MUTE_KEY = 'mega-tetris:muted';
-
-/**
- * Sound is on out of the box. Nothing can actually make a noise before the
- * player's first tap, so an unmuted default cannot ambush anyone; it just means
- * the game has a voice for the people who never open a settings menu.
- */
-function readStoredMute(): boolean {
-  try {
-    return localStorage.getItem(MUTE_KEY) === 'true';
-  } catch {
-    return false;
-  }
-}
-
-function writeStoredMute(muted: boolean): void {
-  try {
-    localStorage.setItem(MUTE_KEY, muted ? 'true' : 'false');
-  } catch {
-    // A player with storage disabled simply gets the default next visit.
-  }
-}
-
 // ---------------------------------------------------------------------------
 // The player
 // ---------------------------------------------------------------------------
@@ -207,6 +190,16 @@ function audioContextCtor(): AudioContextCtor | null {
 export interface GameAudioOptions {
   /** Where the unlock listeners go. Defaults to the document. */
   readonly gestureTarget?: EventTarget;
+  /**
+   * Whether sound is *on*, kept between visits. Phrased as the positive on
+   * purpose: the stored settings say what the player wants to hear, and this
+   * module is the only one that finds it convenient to think in mutes.
+   *
+   * Sound is on out of the box. Nothing can make a noise before the player's
+   * first tap, so an unmuted default cannot ambush anyone; it just means the
+   * game has a voice for the people who never open a settings menu.
+   */
+  readonly storage?: SettingAccess<boolean>;
 }
 
 export function createGameAudio(options: GameAudioOptions = {}): GameAudio {
@@ -215,7 +208,7 @@ export function createGameAudio(options: GameAudioOptions = {}): GameAudio {
 
   let context: AudioContext | null = null;
   let master: GainNode | null = null;
-  let muted = readStoredMute();
+  let muted = options.storage?.read() === false;
   let voices = 0;
   let listening = false;
 
@@ -336,7 +329,7 @@ export function createGameAudio(options: GameAudioOptions = {}): GameAudio {
 
     toggleMute(): boolean {
       muted = !muted;
-      writeStoredMute(muted);
+      options.storage?.write(!muted);
       if (!muted) {
         // Unmuting is itself a gesture, so it is a fine moment to wake up.
         onGesture();

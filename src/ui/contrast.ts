@@ -14,17 +14,18 @@
  * draws it, and `blockMark` is a pure function so the "every kind is distinct"
  * property is a unit test rather than a claim.
  *
- * Everything above `createContrastPreference` is pure.
+ * Everything above `createContrastPreference` is pure, and persistence is handed
+ * in from `src/main.ts` rather than reached for — see `ui/motion.ts`, which this
+ * module deliberately mirrors.
  */
 
 import { PIECE_KINDS, type PieceKind } from '../engine';
+import type { SettingAccess } from './storage';
 
 /** `auto` follows the operating system; the other two override it. */
 export type ContrastSetting = 'auto' | 'more' | 'standard';
 
 export const CONTRAST_SETTINGS: readonly ContrastSetting[] = ['auto', 'more', 'standard'];
-
-export const CONTRAST_SETTING_KEY = 'mega-tetris:contrast';
 
 /** The media query the operating system answers. */
 export const MORE_CONTRAST_QUERY = '(prefers-contrast: more)';
@@ -140,23 +141,6 @@ export function setHighContrast(value: boolean): void {
 // The live preference
 // ---------------------------------------------------------------------------
 
-/** Storage is a nicety, not a requirement: Safari's private mode throws. */
-function readStoredSetting(): ContrastSetting {
-  try {
-    return parseContrastSetting(localStorage.getItem(CONTRAST_SETTING_KEY));
-  } catch {
-    return 'auto';
-  }
-}
-
-function writeStoredSetting(setting: ContrastSetting): void {
-  try {
-    localStorage.setItem(CONTRAST_SETTING_KEY, setting);
-  } catch {
-    // A player with storage disabled simply gets the default next visit.
-  }
-}
-
 export interface ContrastPreference {
   /** Should the cabinet be painted for high contrast right now? */
   high(): boolean;
@@ -170,13 +154,15 @@ export interface ContrastPreference {
 export interface ContrastPreferenceOptions {
   /** Called whenever `high()` would start answering differently. */
   readonly onChange?: (high: boolean, setting: ContrastSetting) => void;
+  /** Where the override is kept between visits; see `ui/motion.ts`. */
+  readonly storage?: SettingAccess<ContrastSetting>;
 }
 
 export function createContrastPreference(
   options: ContrastPreferenceOptions = {},
 ): ContrastPreference {
   const query = typeof matchMedia === 'function' ? matchMedia(MORE_CONTRAST_QUERY) : null;
-  let setting = readStoredSetting();
+  let setting = parseContrastSetting(options.storage?.read());
   let high = isHighContrast(setting, query?.matches ?? false);
 
   function reconcile(): void {
@@ -195,7 +181,7 @@ export function createContrastPreference(
     setting: () => setting,
     cycle(): ContrastSetting {
       setting = nextContrastSetting(setting);
-      writeStoredSetting(setting);
+      options.storage?.write(setting);
       reconcile();
       return setting;
     },

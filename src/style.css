@@ -240,6 +240,19 @@ body {
   display: contents;
 }
 
+/*
+ * `hidden` has to win.
+ *
+ * Half the elements below are shown and hidden from script, and every one of
+ * them sets its own `display` — a flex row, a grid, a block. The attribute's
+ * user-agent `display: none` loses to all of them on specificity, so it is
+ * restated here, once, with the weight to mean what it says. Without this, a
+ * "hidden" stats row is simply a visible stats row.
+ */
+[hidden] {
+  display: none !important;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -420,6 +433,14 @@ body {
   border-radius: calc(var(--radius) - var(--bezel));
 }
 
+/*
+ * The one panel that covers the well, in all three of its states: the attract
+ * screen before the first game, the paused veil, and the scoreboard at the end.
+ *
+ * It scrolls on its own rather than growing the page, because the start screen
+ * is the tallest of the three and a landscape phone is short — and it opts back
+ * into `pan-y` from the playfield's `touch-action: none` so that scroll works.
+ */
 .overlay {
   position: absolute;
   inset: 0;
@@ -428,7 +449,10 @@ body {
   align-items: center;
   justify-content: center;
   gap: 0.55rem;
-  padding: 1rem;
+  padding: 1rem 0.75rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   border-radius: var(--radius);
   background: var(--overlay-veil);
   text-align: center;
@@ -453,6 +477,118 @@ body {
   font-size: clamp(0.72rem, 2.1vmin, 0.9rem);
   color: var(--fg);
   text-wrap: balance;
+}
+
+/*
+ * The line above the title: the game's name on the attract screen, and the
+ * record being broken at the end of a run. Small, spaced and uppercase, so it
+ * reads as a label rather than as a second headline competing with the title.
+ */
+.overlay__eyebrow {
+  margin: 0;
+  font-size: clamp(0.6rem, 1.7vmin, 0.72rem);
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+/* A record is the one thing on this panel allowed to shout. */
+.overlay__eyebrow--record {
+  color: var(--accent-lit);
+  text-shadow: 0 0 0.8rem var(--glow);
+}
+
+.overlay__note {
+  margin: 0;
+  max-width: 18rem;
+  font-size: clamp(0.62rem, 1.8vmin, 0.75rem);
+  color: var(--fg-muted);
+  text-wrap: balance;
+}
+
+/* ------------------------------------------------- the run against the best -- */
+
+/*
+ * Four rows of "what you did, and what you had". A grid rather than a flex row
+ * so the numbers line up down the panel however long the labels get.
+ */
+.runstats {
+  margin: 0.15rem 0 0;
+  display: grid;
+  gap: 0.1rem 0.9rem;
+  width: min(15rem, 100%);
+  font-size: clamp(0.66rem, 1.9vmin, 0.8rem);
+}
+
+.runstats__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: var(--radius-sm);
+}
+
+/* The rows this run pushed past. Lit, not animated — the panel is already
+ * arriving, and two movements at once is one too many. */
+.runstats__row--record {
+  background: var(--panel-raised);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+
+.runstats__label {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.runstats__value {
+  margin: 0;
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+}
+
+.runstats__row--record .runstats__value {
+  color: var(--accent-lit);
+}
+
+/* ------------------------------------------------------- the level picker -- */
+
+.overlay__start {
+  display: flex;
+  justify-content: center;
+}
+
+.level {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.level__label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.level__select {
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  /* Comfortably past the 44px minimum on the axis a thumb has to hit. */
+  min-height: 2.2rem;
+  padding: 0.2rem 0.5rem;
+  border: var(--control-border-width) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--fg);
+  cursor: pointer;
+  touch-action: manipulation;
 }
 
 /* --------------------------------------------------------------- panels -- */
@@ -537,6 +673,16 @@ body {
   align-items: baseline;
   justify-content: space-between;
   gap: 0.5rem;
+}
+
+/*
+ * Lit while the run in progress is already past the stored best. Nothing here
+ * moves, so reduced motion has nothing to switch off — the encouragement is a
+ * colour, and it arrives the moment the number does.
+ */
+.stats__row--record .stats__value {
+  color: var(--accent-lit);
+  text-shadow: 0 0 0.6rem var(--glow);
 }
 
 .stats__label {
@@ -738,6 +884,28 @@ body {
   margin: 0;
   font-size: 0.7rem;
   color: var(--fg-muted);
+}
+
+/*
+ * The two-step reset. It replaces the button that asked for it rather than
+ * appearing underneath it, so the menu never offers both the question and the
+ * answer at once — and the safe choice is the primary one.
+ */
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.6rem 0.65rem;
+  border: var(--control-border-width) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--panel-canvas);
+}
+
+.confirm__text {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--fg);
+  text-wrap: balance;
 }
 
 /* At least 44px on both axes, like every other target in the game. */
