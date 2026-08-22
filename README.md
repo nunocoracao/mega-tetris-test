@@ -4,8 +4,7 @@ A cheerful, fast-loading falling-block puzzle game that lives entirely in the
 browser — a tiny arcade cabinet at a URL. No backend, no accounts, no build
 server: just static files.
 
-This repository is currently a scaffold. Gameplay lands in later work; what is
-here today is the toolchain the game is built on.
+The game is playable: `npm run dev`, then press Play and use the arrow keys.
 
 ## Tech
 
@@ -48,7 +47,8 @@ any static host or subdirectory and will work as-is.
 ├── index.html        # Vite entry point and document shell
 ├── src/
 │   ├── engine/       # Game rules: board, pieces, seeded bag, state machine
-│   ├── main.ts       # App entry module
+│   ├── ui/           # Browser layer: canvas renderer, input, loop, HUD, shell
+│   ├── main.ts       # Composition root — wires the engine to the browser
 │   ├── style.css     # Global styles
 │   └── *.test.ts     # Unit tests, colocated with the code they cover
 ├── tsconfig.json     # Strict TypeScript config (noEmit — Vite handles emit)
@@ -56,7 +56,8 @@ any static host or subdirectory and will work as-is.
 ```
 
 Game logic is kept separate from rendering so board and scoring rules can be
-tested without a DOM.
+tested without a DOM. Nothing in `src/ui/` knows a game rule, and nothing in
+`src/engine/` knows the browser exists.
 
 ## Game engine
 
@@ -94,6 +95,43 @@ plus the same ordered calls always yields a deeply equal result.
 | Hold           | Swaps the active piece, resets it to spawn, locked until the next lock. |
 | Game over      | A newly spawned piece has nowhere to sit.                             |
 
+## Browser layer
+
+`src/ui/` turns the state machine into a game you can play. Each module does one
+job and holds no rules of its own:
+
+| Module        | Responsibility                                                        |
+| ------------- | --------------------------------------------------------------------- |
+| `renderer.ts` | Paints a `GameState` onto a canvas: well, stack, ghost, active piece.  |
+| `palette.ts`  | Every colour in the game, in one map.                                  |
+| `input.ts`    | Keyboard bindings and DAS/ARR auto-repeat, exported as data.           |
+| `loop.ts`     | `requestAnimationFrame` timing, delta clamping, pause when hidden.     |
+| `shell.ts`    | Builds the DOM: canvases, readouts, overlay, buttons, live region.     |
+| `hud.ts`      | Score/level/lines, overlay copy, screen-reader announcements.          |
+
+Canvases are sized to their CSS box times `devicePixelRatio` and redrawn from a
+`ResizeObserver`, so the grid stays crisp on any display. The two rows above the
+playfield are the spawn area: a new piece is drawn there faintly, so it is
+visible from the moment it appears rather than a second later.
+
+Frame deltas are clamped to 100 ms and the loop suspends while the tab is
+hidden, so coming back to a backgrounded game never costs a burst of dropped
+rows — the game simply pauses.
+
 ## Controls
 
-Documented once gameplay exists.
+| Keys        | Action                |
+| ----------- | --------------------- |
+| `←` / `A`   | Move left             |
+| `→` / `D`   | Move right            |
+| `↓` / `S`   | Soft drop             |
+| `Space`     | Hard drop             |
+| `↑` / `X`   | Rotate right          |
+| `Z` / `Ctrl`| Rotate left           |
+| `C` / `Shift`| Hold piece           |
+| `P` / `Esc` | Pause / resume        |
+| `R`         | Restart               |
+
+Left and right auto-repeat after a 170 ms delay, then every 40 ms. The bindings
+live in `KEY_BINDINGS` in `src/ui/input.ts` and the on-screen controls list is
+generated from that table, so the two cannot drift apart.
