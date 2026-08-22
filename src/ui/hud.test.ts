@@ -2,15 +2,22 @@ import { describe, expect, it } from 'vitest';
 
 import { applyInput, boardFromStrings, createGame, type GameState } from '../engine';
 import {
+  MENU_STATS,
+  bestLine,
   describeEvent,
   describeHold,
   describePlayfield,
   describeQueue,
+  describeRunEnd,
+  formatDuration,
   formatNumber,
+  menuStatValues,
   overlayContent,
   playButtonLabel,
   stackHeight,
+  summaryLine,
 } from './hud';
+import { applyRun, defaultStats, type RunSummary } from './stats';
 
 const ready = createGame({ seed: 7 });
 const playing = applyInput(ready, { type: 'resume' });
@@ -38,13 +45,13 @@ describe('overlayContent', () => {
   });
 
   it('tells a touch player about gestures rather than about keys', () => {
-    expect(overlayContent(ready, true)?.hint).toMatch(/drag/i);
-    expect(overlayContent(ready, true)?.hint).not.toMatch(/arrow/i);
-    expect(overlayContent(paused, true)?.hint).not.toMatch(/press/i);
+    expect(overlayContent(ready, { touch: true })?.hint).toMatch(/drag/i);
+    expect(overlayContent(ready, { touch: true })?.hint).not.toMatch(/arrow/i);
+    expect(overlayContent(paused, { touch: true })?.hint).not.toMatch(/press/i);
 
     // Everything else reads the same whichever controls are in front of them.
-    expect(overlayContent(over, true)?.hint).toBe(overlayContent(over)?.hint);
-    expect(overlayContent(playing, true)).toBeNull();
+    expect(overlayContent(over, { touch: true })?.hint).toBe(overlayContent(over)?.hint);
+    expect(overlayContent(playing, { touch: true })).toBeNull();
   });
 });
 
@@ -148,5 +155,178 @@ describe('describePlayfield', () => {
     expect(describePlayfield(over)).toContain('Game over.');
     expect(describePlayfield(ready)).toContain('Ready to play.');
     expect(describePlayfield(playing)).not.toContain('Paused');
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Persistence, stats and the one-more-game loop
+// ---------------------------------------------------------------------------
+
+function run(overrides: Partial<RunSummary> = {}): RunSummary {
+  return { score: 4200, lines: 12, level: 3, startLevel: 1, durationMs: 161_000, ...overrides };
+}
+
+describe('formatDuration', () => {
+  it('reads as a clock, without an hour nobody played', () => {
+    expect(formatDuration(0)).toBe('0:00');
+    expect(formatDuration(9_400)).toBe('0:09');
+    expect(formatDuration(161_000)).toBe('2:41');
+    expect(formatDuration(3_600_000)).toBe('1:00:00');
+    expect(formatDuration(3_723_000)).toBe('1:02:03');
+  });
+
+  it('never shows a negative clock', () => {
+    expect(formatDuration(-5000)).toBe('0:00');
+  });
+});
+
+describe('summaryLine', () => {
+  it('leads with what the player did, not with what happened to them', () => {
+    expect(summaryLine(run())).toBe('12 lines, level 3, 4,200 points');
+  });
+
+  it('counts one line as one line', () => {
+    expect(summaryLine(run({ lines: 1 }))).toBe('1 line, level 3, 4,200 points');
+  });
+});
+
+describe('bestLine', () => {
+  it('says all three numbers of a personal best', () => {
+    const stats = applyRun(defaultStats(), run()).stats;
+
+    expect(bestLine(stats.best)).toBe('4,200 points, level 3, 12 lines');
+  });
+});
+
+describe('describeRunEnd', () => {
+  it('celebrates a high score out loud, not only on the panel', () => {
+    const update = applyRun(defaultStats(), run());
+
+    expect(describeRunEnd(update)).toContain('A new high score!');
+  });
+
+  it('distinguishes a lesser record from the headline one', () => {
+    const first = applyRun(defaultStats(), run({ score: 9000, lines: 5 })).stats;
+    const update = applyRun(first, run({ score: 100, lines: 40 }));
+
+    expect(describeRunEnd(update)).toContain('A new personal best.');
+    expect(describeRunEnd(update)).not.toContain('high score');
+  });
+
+  it('names the target to beat when nothing was broken', () => {
+    const first = applyRun(defaultStats(), run({ score: 9000, lines: 40, level: 9 })).stats;
+    const update = applyRun(first, run({ score: 100, lines: 1, level: 1 }));
+
+    expect(describeRunEnd(update)).toContain('Your best is 9,000.');
+  });
+
+  it('does not mention a best of nothing on a first, scoreless game', () => {
+    const update = applyRun(defaultStats(), run({ score: 0, lines: 0, level: 1 }));
+
+    expect(describeRunEnd(update)).toBe('Game over. Final score 0, 0 lines.');
+  });
+});
+
+describe('the start screen', () => {
+  it('names the game, pitches it, and offers the level picker', () => {
+    const content = overlayContent(ready);
+
+    expect(content?.kind).toBe('start');
+    expect(content?.eyebrow).toBe('Mega Tetris');
+    expect(content?.button).toBe('Play');
+    expect(content?.showLevelSelect).toBe(true);
+    expect(content?.showHelp).toBe(true);
+  });
+
+  it('says nothing about a personal best before there is one', () => {
+    expect(overlayContent(ready, { stats: defaultStats() })?.note).toBeNull();
+  });
+
+  it('shows the best for the ladder the picker is set to', () => {
+    const stats = applyRun(
+      applyRun(defaultStats(), run({ score: 9000, startLevel: 1 })).stats,
+      run({ score: 300, startLevel: 5 }),
+    ).stats;
+
+    expect(overlayContent(ready, { stats, startLevel: 1 })?.note).toContain('9,000 points');
+    expect(overlayContent(ready, { stats, startLevel: 5 })?.note).toContain('300 points');
+  });
+});
+
+describe('the game-over panel', () => {
+  const previous = applyRun(defaultStats(), run({ score: 9000, lines: 40, level: 9 })).stats;
+
+  it('leads with Play again and a one-line summary of the run', () => {
+    const result = applyRun(previous, run({ score: 4200, lines: 12, level: 3 }));
+    const content = overlayContent(over, { result });
+
+    expect(content?.kind).toBe('over');
+    expect(content?.button).toBe('Play again');
+    expect(content?.hint).toBe('12 lines, level 3, 4,200 points');
+  });
+
+  it('puts this run beside the best on every row', () => {
+    const result = applyRun(previous, run({ score: 4200, lines: 12, level: 3 }));
+    const rows = overlayContent(over, { result })?.rows ?? [];
+
+    expect(rows.map((row) => row.key)).toEqual(['score', 'lines', 'level', 'time']);
+    expect(rows[0]).toMatchObject({ value: '4,200', best: '9,000', record: false });
+    expect(rows[3]).toMatchObject({ value: '2:41', record: false });
+  });
+
+  it('celebrates a new best and marks the rows that moved', () => {
+    const result = applyRun(previous, run({ score: 50_000, lines: 12, level: 3 }));
+    const content = overlayContent(over, { result });
+
+    expect(content?.eyebrow).toBe('New high score!');
+    expect(content?.rows.filter((row) => row.record).map((row) => row.key)).toEqual(['score']);
+  });
+
+  it('stays quiet when nothing was broken', () => {
+    const result = applyRun(previous, run({ score: 10, lines: 0, level: 1 }));
+
+    expect(overlayContent(over, { result })?.eyebrow).toBeNull();
+  });
+
+  it('leaves the best column empty rather than showing a zero', () => {
+    const result = applyRun(defaultStats(), run());
+    const rows = overlayContent(over, { result })?.rows ?? [];
+
+    expect(rows.every((row) => row.best === null)).toBe(true);
+  });
+
+  it('says when a run was measured on the head-start ladder', () => {
+    const result = applyRun(defaultStats(), run({ startLevel: 7 }));
+
+    expect(overlayContent(over, { result })?.note).toContain('level 7');
+  });
+
+  it('falls back to the snapshot when the run was never recorded', () => {
+    const content = overlayContent(over);
+
+    expect(content?.hint).toContain('12,345');
+    expect(content?.rows).toHaveLength(4);
+  });
+});
+
+describe('menuStatValues', () => {
+  it('has a value for every row the menu shows', () => {
+    const values = menuStatValues(applyRun(defaultStats(), run()).stats);
+
+    for (const { key } of MENU_STATS) {
+      // Every key resolves; only the head-start row is allowed to be absent.
+      expect(Object.hasOwn(values, key), key).toBe(true);
+    }
+    expect(values.highScore).toBe('4,200');
+    expect(values.gamesPlayed).toBe('1');
+    expect(values.totalLines).toBe('12');
+  });
+
+  it('hides the head-start row until there is a head start to show', () => {
+    expect(menuStatValues(defaultStats()).headStart).toBeNull();
+    expect(menuStatValues(applyRun(defaultStats(), run({ startLevel: 4 })).stats).headStart).toBe(
+      '4,200',
+    );
   });
 });

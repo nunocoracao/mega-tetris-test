@@ -28,7 +28,16 @@
  * than a count-up, no particles and no shake at all.
  */
 
-import { cellAt, type Board, type GameEvent, type PieceKind, type Point } from '../engine';
+import {
+  PIECE_KINDS,
+  boxSize,
+  cellAt,
+  getCells,
+  type Board,
+  type GameEvent,
+  type PieceKind,
+  type Point,
+} from '../engine';
 import { getPalette, withAlpha } from './palette';
 import type { FieldView } from './renderer';
 
@@ -62,6 +71,7 @@ const SHARD_SIZE_JITTER = 0.13;
 
 /** How many row flashes can overlap. Two clears 250ms apart is the realistic max. */
 const FLASH_CAPACITY = 3;
+
 
 /** How long a cleared row stays visible after it has gone. */
 const FLASH_MS = 240;
@@ -115,6 +125,30 @@ const GAME_OVER_ROW_MS = 24;
 
 /** How long the score count-up takes, however big the jump. */
 export const COUNT_UP_MS = 340;
+
+// -- attract mode -----------------------------------------------------------
+//
+// The pieces drifting behind the start screen. This is the one effect measured
+// in *fractions of the field* rather than in cells, because it is wallpaper
+// rather than something happening at a board position: a shape a third of the
+// way across belongs a third of the way across at any size.
+
+/** How many drift at once. Few, so the panel over them stays the subject. */
+const ATTRACT_COUNT = 7;
+
+/** Field heights per second. A piece takes the best part of a minute to rise. */
+const ATTRACT_SPEED = 0.024;
+const ATTRACT_SPEED_JITTER = 0.018;
+
+/** Turns per second, in either direction. Slow enough to read as drifting. */
+const ATTRACT_SPIN = 0.03;
+
+/** How present they are. Wallpaper, not competition for the Play button. */
+const ATTRACT_ALPHA = 0.32;
+
+/** Block side as a fraction of a cell — smaller than a real one, so a drifting
+ *  shape never reads as a piece in play. */
+const ATTRACT_SCALE = 0.6;
 
 /** No web fonts in this project, so the canvas borrows the same stacks the CSS uses. */
 const DISPLAY_FONT = "'Avenir Next', 'Segoe UI', system-ui, sans-serif";
@@ -175,6 +209,25 @@ export function createCounter(durationMs: number = COUNT_UP_MS): Counter {
 // ---------------------------------------------------------------------------
 // Pooled records
 // ---------------------------------------------------------------------------
+
+/**
+ * One piece drifting behind the start screen.
+ *
+ * The only effect whose position is a *fraction of the field* rather than a
+ * board cell: it is wallpaper, not something happening at a coordinate, so it
+ * should sit a third of the way across whatever size the well happens to be.
+ */
+interface AttractPiece {
+  kind: PieceKind;
+  /** 0..1 across the field, and 0..1 down it — `y` runs off both ends. */
+  x: number;
+  y: number;
+  angle: number;
+  /** Field heights per second, upwards. */
+  speed: number;
+  /** Turns per second, signed. */
+  spin: number;
+}
 
 interface Shard {
   active: boolean;
@@ -273,6 +326,14 @@ export interface Effects {
   cellSquash(x: number, y: number): number;
   /** The score to show in the HUD, which trails the real one briefly. */
   displayScore(): number;
+  /**
+   * Turn the start screen's drifting pieces on or off.
+   *
+   * Idempotent, and honoured only while movement is wanted: a player who has
+   * asked for reduced motion gets a still well behind the panel, which is the
+   * whole point of asking.
+   */
+  setAttract(on: boolean): void;
   /** Drop everything in flight — a new game, or motion being switched off. */
   clear(): void;
   /** Live particle count. For the tests and for the performance note. */
@@ -650,6 +711,55 @@ export function createEffects(options: EffectsOptions): Effects {
     }
   }
 
+  // -- attract mode ---------------------------------------------------------
+
+  const attract: AttractPiece[] = [];
+  for (let index = 0; index < ATTRACT_COUNT; index += 1) {
+    attract.push({ kind: 'T', x: 0.5, y: 0.5, angle: 0, speed: 0, spin: 0 });
+  }
+  let attractOn = false;
+  let attractSeeded = false;
+
+  /** A fresh kind, lane and spin for one drifter. */
+  function dealAttract(piece: AttractPiece, lane: number): void {
+    piece.kind = PIECE_KINDS[Math.floor(random() * PIECE_KINDS.length)] ?? 'T';
+    // Kept off the very edges, where a rotating piece would clip the frame.
+    piece.x = 0.12 + random() * 0.76;
+    piece.y = lane;
+    piece.angle = random() * Math.PI * 2;
+    piece.speed = ATTRACT_SPEED + random() * ATTRACT_SPEED_JITTER;
+    piece.spin = (random() < 0.5 ? -1 : 1) * ATTRACT_SPIN * (0.5 + random());
+  }
+
+  function seedAttract(): void {
+    // Spread down the field rather than bunched, so the first frame already
+    // looks like something that has been drifting for a while.
+    for (let index = 0; index < attract.length; index += 1) {
+      const piece = attract[index];
+      if (piece !== undefined) {
+        dealAttract(piece, (index + random()) / attract.length);
+      }
+    }
+    attractSeeded = true;
+  }
+
+  function attractVisible(): boolean {
+    return attractOn && !calm();
+  }
+
+  function setAttract(on: boolean): void {
+    if (on === attractOn) {
+      return;
+    }
+    attractOn = on;
+    // Seeded on first use, never at construction: the deterministic `random`
+    // the tests inject belongs to the bursts, and must not be spent on
+    // wallpaper nobody asked for.
+    if (on && !attractSeeded) {
+      seedAttract();
+    }
+  }
+
   // -- the frame ------------------------------------------------------------
 
   function update(deltaMs: number, score: number): void {
@@ -666,6 +776,18 @@ export function createEffects(options: EffectsOptions): Effects {
       return;
     }
     const seconds = deltaMs / 1000;
+
+    if (attractVisible()) {
+      for (const piece of attract) {
+        piece.y -= piece.speed * seconds;
+        piece.angle += piece.spin * seconds * Math.PI * 2;
+        if (piece.y < -0.2) {
+          // Off the top: deal it again at the bottom, so the field never
+          // gradually empties while somebody reads the panel.
+          dealAttract(piece, 1.2);
+        }
+      }
+    }
 
     for (const shard of shards) {
       if (!shard.active) {
@@ -781,6 +903,33 @@ export function createEffects(options: EffectsOptions): Effects {
     const top = layout.y;
 
     ctx.save();
+
+    // 0. The start screen's drifting pieces, behind everything.
+    if (attractVisible()) {
+      const block = cell * ATTRACT_SCALE;
+      const gap = block * 0.08;
+      ctx.globalAlpha = ATTRACT_ALPHA;
+      for (const piece of attract) {
+        const cells = getCells(piece.kind, 0);
+        // Rotate about the middle of the piece's own bounding box, which is
+        // what makes the tumble look like a tumble rather than a swing.
+        const middle = (boxSize(piece.kind) - 1) / 2;
+        ctx.save();
+        ctx.translate(left + piece.x * layout.width, top + piece.y * layout.height);
+        ctx.rotate(piece.angle);
+        ctx.fillStyle = pieces[piece.kind].fill;
+        for (const point of cells) {
+          ctx.fillRect(
+            (point.x - middle) * block - block / 2,
+            (point.y - middle) * block - block / 2,
+            block - gap,
+            block - gap,
+          );
+        }
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
+    }
 
     // 1. The rows that just went, held where they were.
     for (const flash of flashes) {
@@ -923,6 +1072,7 @@ export function createEffects(options: EffectsOptions): Effects {
     observe,
     update,
     render,
+    setAttract,
     shake,
     cellSquash,
     displayScore: () => counter.value(),

@@ -5,7 +5,8 @@ browser — a tiny arcade cabinet at a URL. No backend, no accounts, no build
 server: just static files.
 
 The game is playable: `npm run dev`, then press Play and use the arrow keys — or
-open it on a phone and drag, tap and flick.
+open it on a phone and drag, tap and flick. It remembers your settings and your
+personal bests between visits, and nothing ever leaves the browser.
 
 ## Tech
 
@@ -52,6 +53,7 @@ any static host or subdirectory and will work as-is.
 ├── src/
 │   ├── engine/       # Game rules: board, pieces, seeded bag, state machine
 │   ├── ui/           # Browser layer: canvas renderer, input, loop, HUD, shell
+│   │                 #   plus stats.ts (records) and storage.ts (persistence)
 │   ├── main.ts       # Composition root — wires the engine to the browser
 │   ├── style.css     # Visual identity: the `:root` palette and the layout
 │   └── *.test.ts     # Unit tests, colocated with the code they cover
@@ -200,6 +202,68 @@ machine. It persists under `mega-tetris:motion`, and the decision is published t
 the stylesheet as `data-motion` on the root element so the CSS transitions follow
 exactly the same rule the canvas does.
 
+## The loop: start screen, bests and one more game
+
+The cabinet has an attract mode. Before the first game you land on a start
+screen inside the well — the game's name, a one-line pitch, a **Play** button, a
+link to the help panel, your personal best if you have one, and a **start level**
+picker for 1 to 10. Behind the panel, seven piece silhouettes drift slowly
+upward and tumble; under reduced motion they simply are not there.
+
+When a run ends, the panel leads with **Play again**, already focused. `Enter`,
+`Space` or `R` restart from anywhere, and a restart is instant — a new snapshot
+and a repaint, no reload and nothing to rebuild. Under the heading is the run in
+one line ("12 lines, level 3, 4,200 points") and then four rows putting the run
+beside your best: score, lines, level and time. Rows you pushed past light up,
+and a new high score is called out above the title and in the live region.
+
+### What is remembered, and how
+
+| Stat                | Counts                                    |
+| ------------------- | ----------------------------------------- |
+| High score          | Best score from a run started on level 1  |
+| Highest level       | Furthest level reached, likewise          |
+| Most lines in a run | Best single run, likewise                 |
+| Best head start     | Best score from a run started above 1     |
+| Games played        | Every run that reached a game over        |
+| Lines all-time      | Every line ever cleared                   |
+
+Starting above level 1 is a head start — faster gravity, but ten levels of easy
+scoring skipped — so those runs keep their **own** bests and stay out of the
+headline number. The totals count every run, because those are a record of time
+spent rather than of skill. `src/ui/stats.ts` holds all of that as pure
+functions; `applyRun(stats, run)` is the single place a record is decided, and
+`src/ui/stats.test.ts` argues the edge cases (a tie is not a record, a run that
+scored nothing broke nothing, a head start is measured against head starts).
+
+### Storage
+
+One namespaced key, `mega-tetris:store`, holding one versioned object:
+
+```json
+{ "version": 2, "settings": { … }, "stats": { … } }
+```
+
+`src/ui/storage.ts` is the only file in the project that touches
+`localStorage`, and it is written on the assumption that storage is hostile.
+Safari's private mode throws from `getItem`; an enterprise policy can switch
+storage off entirely; a full quota throws on write; and the value itself may be
+truncated JSON, an array, or an object with the right keys and the wrong types.
+Every call is wrapped and every parsed value is validated, so the worst case is
+"this player gets the defaults" and never a broken game. Whatever it makes sense
+of is written straight back, so a corrupt entry is corrupt exactly once.
+
+`SCHEMA_VERSION` is a real hinge, not a decoration: `MIGRATIONS` carries one
+entry per step, and version 1 is the settings-only, loose-key era this game
+actually shipped with. Those five old keys are read once, folded into the store
+and deleted. Data from a *newer* version than the running build is salvaged
+rather than discarded — someone's high score is not ours to throw away.
+
+The modules that used to keep a key each — `motion.ts`, `contrast.ts`,
+`touch.ts`, `audio.ts` — now take a typed `SettingAccess<T>` from `main.ts`
+instead. The dependency arrows all point into `storage.ts`, which is what keeps
+the format in one testable file.
+
 ## Controls
 
 | Keys        | Action                |
@@ -340,10 +404,16 @@ copy of either to go stale.
 
 ### Pause menu
 
-Pausing opens it — Resume, Restart, Help, and the four settings (**Sound**,
-**Effects**, **Contrast**, **Touchpad**). Closing it counts you back in three,
-two, one rather than dropping you onto a falling piece, and the count runs off
-the game loop's own delta, so it stops with the tab.
+Pausing opens it — Resume, Restart, Help, the four settings (**Sound**,
+**Effects**, **Contrast**, **Touchpad**) and your personal bests. Closing it
+counts you back in three, two, one rather than dropping you onto a falling
+piece, and the count runs off the game loop's own delta, so it stops with the
+tab.
+
+**Reset stats** lives there too, behind a two-step confirmation: the button asks,
+and a second, differently-worded control agrees. Erasing a personal best is the
+one destructive thing in the game, and a single mis-tap in a menu is not
+consent.
 
 ### Contrast and colour
 

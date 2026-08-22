@@ -23,7 +23,9 @@
  */
 
 import { helpBodyMarkup } from './help';
+import { MENU_STATS, OVERLAY_ROW_KEYS, OVERLAY_ROW_LABELS } from './hud';
 import { KEY_BINDINGS, describeBinding } from './input';
+import { START_LEVELS } from './stats';
 import { TOUCH_PAD_BUTTONS } from './touch';
 
 export interface Shell {
@@ -39,11 +41,26 @@ export interface Shell {
   /** What the hold slot is holding, likewise. */
   readonly holdText: HTMLElement;
   readonly score: HTMLElement;
+  /** The personal best, beside the running score. */
+  readonly best: HTMLElement;
+  /** The row it lives in, which lights up while this run is past it. */
+  readonly bestRow: HTMLElement;
   readonly level: HTMLElement;
   readonly lines: HTMLElement;
   readonly overlay: HTMLElement;
+  /** The small line above the title: the game's name, or a record broken. */
+  readonly overlayEyebrow: HTMLElement;
   readonly overlayTitle: HTMLElement;
   readonly overlayHint: HTMLElement;
+  /** The run-against-best table on the game-over panel. */
+  readonly overlayRows: HTMLElement;
+  /** A footnote under the panel: the personal best, or which ladder applied. */
+  readonly overlayNote: HTMLElement;
+  /** The start screen's level picker and its label. */
+  readonly overlayStart: HTMLElement;
+  readonly startLevel: HTMLSelectElement;
+  /** Opens the help panel from the start screen. */
+  readonly overlayHelp: HTMLButtonElement;
   readonly overlayButton: HTMLButtonElement;
   /** The 3-2-1 shown over the well on the way back from a pause. */
   readonly countdown: HTMLElement;
@@ -70,6 +87,13 @@ export interface Shell {
   readonly pauseRestart: HTMLButtonElement;
   readonly pauseHelp: HTMLButtonElement;
   readonly pauseClose: HTMLButtonElement;
+  /** The personal-bests readout inside the pause menu. */
+  readonly menuStats: HTMLElement;
+  /** Asks for the reset; the confirmation below is what actually does it. */
+  readonly statsReset: HTMLButtonElement;
+  readonly statsConfirm: HTMLElement;
+  readonly statsConfirmYes: HTMLButtonElement;
+  readonly statsConfirmNo: HTMLButtonElement;
   readonly helpDialog: HTMLElement;
   /**
    * The scrolling panel inside the help dialog. Focus lands here rather than on
@@ -126,6 +150,81 @@ function padMarkup(): string {
   ).join('');
 }
 
+/**
+ * The game-over panel's "this run against your best" table.
+ *
+ * Built empty-but-valid rather than generated on demand: the values are written
+ * into these `<dd>`s by `ui/hud.ts`, so the panel never rebuilds its own DOM
+ * while it is fading in, and the shell that the accessibility audit sees is the
+ * same shell the player gets.
+ */
+function runStatsMarkup(): string {
+  return OVERLAY_ROW_KEYS.map(
+    (key) =>
+      `<div class="runstats__row" data-run-row="${key}">
+         <dt class="runstats__label">${OVERLAY_ROW_LABELS[key]}</dt>
+         <dd class="runstats__value" data-run-value="${key}">—</dd>
+       </div>`,
+  ).join('');
+}
+
+/**
+ * The pause menu's personal-bests list.
+ *
+ * Static rows with placeholder values, filled by `src/main.ts` whenever the
+ * menu opens — the same trick the game-over table uses, and for the same
+ * reason: a `<dl>` the audit can see, and no DOM built at the moment a dialog
+ * is animating in.
+ */
+function menuStatsMarkup(): string {
+  return MENU_STATS.map(
+    (row) =>
+      `<div class="stats__row" data-stat-row="${row.key}">
+         <dt class="stats__label">${row.label}</dt>
+         <dd class="stats__value" data-stat="${row.key}">0</dd>
+       </div>`,
+  ).join('');
+}
+
+/** The start screen's level picker, straight off the engine's supported range. */
+function levelOptionsMarkup(): string {
+  return START_LEVELS.map((level) => `<option value="${level}">${level}</option>`).join('');
+}
+
+/**
+ * The one panel that covers the well: attract screen, paused veil, scoreboard.
+ *
+ * All three states share this markup and `ui/hud.ts` decides which parts of it
+ * are showing, which is what makes "play again" instant — there is nothing to
+ * build, only text to change.
+ */
+function overlayMarkup(): string {
+  return `
+    <div class="overlay" data-overlay hidden>
+      <p class="overlay__eyebrow" data-overlay-eyebrow hidden></p>
+      <!-- Seeded with the copy the start screen uses, so the panel has words
+           and the button has a name from the first parse rather than the first
+           paint. -->
+      <p class="overlay__title" data-overlay-title>One more game.</p>
+      <p class="overlay__hint" data-overlay-hint></p>
+      <dl class="runstats" data-overlay-rows hidden>${runStatsMarkup()}</dl>
+      <p class="overlay__note" data-overlay-note hidden></p>
+      <div class="overlay__start" data-overlay-start hidden>
+        <label class="level" for="start-level">
+          <span class="level__label">Start level</span>
+          <select class="level__select" id="start-level" data-start-level>
+            ${levelOptionsMarkup()}
+          </select>
+        </label>
+      </div>
+      <button type="button" class="button button--primary" data-overlay-button>Play</button>
+      <button type="button" class="button button--quiet" data-overlay-help hidden>
+        How to play
+      </button>
+    </div>
+  `;
+}
+
 /** The little round × in the corner of a dialog. */
 function closeButtonMarkup(attribute: string, label: string): string {
   return `<button type="button" class="modal__close" ${attribute} aria-label="${label}">
@@ -167,6 +266,31 @@ function pauseDialogMarkup(): string {
             <button type="button" class="button button--quiet" data-motion-toggle>Effects: Auto</button>
             <button type="button" class="button button--quiet" data-contrast-toggle>Contrast: Auto</button>
             <button type="button" class="button button--quiet" data-pad-toggle>Touchpad: Auto</button>
+          </div>
+        </section>
+        <section class="modal__section" aria-labelledby="pause-bests-title">
+          <h3 class="modal__heading" id="pause-bests-title">Personal bests</h3>
+          <dl class="stats" data-menu-stats>${menuStatsMarkup()}</dl>
+          <div class="settings">
+            <button type="button" class="button button--quiet" data-stats-reset>
+              Reset stats…
+            </button>
+          </div>
+          <!--
+            Two steps on purpose. Erasing a personal best is the one destructive
+            thing in the game, and a single mis-tap in a menu is not consent —
+            so the button asks, and a second, differently-worded control agrees.
+          -->
+          <div class="confirm" data-stats-confirm hidden>
+            <p class="confirm__text">
+              Erase every personal best and total? This cannot be undone.
+            </p>
+            <div class="modal__actions">
+              <button type="button" class="button button--primary" data-stats-keep>
+                Keep them
+              </button>
+              <button type="button" class="button" data-stats-erase>Erase everything</button>
+            </div>
           </div>
         </section>
         <p class="modal__foot">Closing the menu counts you back in: three, two, one.</p>
@@ -212,6 +336,10 @@ export function createShell(root: HTMLElement): Shell {
             <h2 class="panel__title">Score</h2>
             <p class="score" data-score>0</p>
             <dl class="stats">
+              <div class="stats__row" data-best-row>
+                <dt class="stats__label">Best</dt>
+                <dd class="stats__value" data-best>—</dd>
+              </div>
               <div class="stats__row">
                 <dt class="stats__label">Level</dt>
                 <dd class="stats__value" data-level>1</dd>
@@ -245,13 +373,7 @@ export function createShell(root: HTMLElement): Shell {
             aria-labelledby="playfield-summary"
           ></canvas>
           <p class="countdown" data-countdown aria-hidden="true" hidden></p>
-          <div class="overlay" data-overlay hidden>
-            <p class="overlay__title" data-overlay-title></p>
-            <p class="overlay__hint" data-overlay-hint></p>
-            <!-- Seeded with the copy the 'ready' state uses, so the control has
-                 a name from the first parse rather than from the first paint. -->
-            <button type="button" class="button button--primary" data-overlay-button>Play</button>
-          </div>
+          ${overlayMarkup()}
         </div>
 
         <div class="rail rail--end">
@@ -309,11 +431,19 @@ export function createShell(root: HTMLElement): Shell {
     nextText: must<HTMLElement>(root, '[data-next-text]'),
     holdText: must<HTMLElement>(root, '[data-hold-text]'),
     score: must<HTMLElement>(root, '[data-score]'),
+    best: must<HTMLElement>(root, '[data-best]'),
+    bestRow: must<HTMLElement>(root, '[data-best-row]'),
     level: must<HTMLElement>(root, '[data-level]'),
     lines: must<HTMLElement>(root, '[data-lines]'),
     overlay: must<HTMLElement>(root, '[data-overlay]'),
+    overlayEyebrow: must<HTMLElement>(root, '[data-overlay-eyebrow]'),
     overlayTitle: must<HTMLElement>(root, '[data-overlay-title]'),
     overlayHint: must<HTMLElement>(root, '[data-overlay-hint]'),
+    overlayRows: must<HTMLElement>(root, '[data-overlay-rows]'),
+    overlayNote: must<HTMLElement>(root, '[data-overlay-note]'),
+    overlayStart: must<HTMLElement>(root, '[data-overlay-start]'),
+    startLevel: must<HTMLSelectElement>(root, '[data-start-level]'),
+    overlayHelp: must<HTMLButtonElement>(root, '[data-overlay-help]'),
     overlayButton: must<HTMLButtonElement>(root, '[data-overlay-button]'),
     countdown: must<HTMLElement>(root, '[data-countdown]'),
     playButton: must<HTMLButtonElement>(root, '[data-play]'),
@@ -331,6 +461,11 @@ export function createShell(root: HTMLElement): Shell {
     pauseRestart: must<HTMLButtonElement>(root, '[data-pause-restart]'),
     pauseHelp: must<HTMLButtonElement>(root, '[data-pause-help]'),
     pauseClose: must<HTMLButtonElement>(root, '[data-pause-close]'),
+    menuStats: must<HTMLElement>(root, '[data-menu-stats]'),
+    statsReset: must<HTMLButtonElement>(root, '[data-stats-reset]'),
+    statsConfirm: must<HTMLElement>(root, '[data-stats-confirm]'),
+    statsConfirmYes: must<HTMLButtonElement>(root, '[data-stats-erase]'),
+    statsConfirmNo: must<HTMLButtonElement>(root, '[data-stats-keep]'),
     helpDialog: must<HTMLElement>(root, '[data-help-dialog]'),
     helpPanel: must<HTMLElement>(root, '[data-help-panel]'),
     helpClose: must<HTMLButtonElement>(root, '[data-help-close]'),

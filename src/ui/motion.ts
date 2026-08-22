@@ -13,14 +13,19 @@
  *
  * Everything above the `createMotionPreference` line is a pure function of its
  * arguments, so the whole decision table is testable without a browser.
+ *
+ * Persistence is *handed in*, not reached for: `ui/storage.ts` owns the one
+ * `localStorage` key the game uses and `src/main.ts` passes this module the
+ * single setting it owns. The type import below is erased at build time, so the
+ * runtime dependency runs one way only — into storage, never out of it.
  */
+
+import type { SettingAccess } from './storage';
 
 /** `auto` follows the operating system; the other two override it. */
 export type MotionSetting = 'auto' | 'full' | 'reduced';
 
 export const MOTION_SETTINGS: readonly MotionSetting[] = ['auto', 'full', 'reduced'];
-
-export const MOTION_SETTING_KEY = 'mega-tetris:motion';
 
 /** The media query the operating system answers. */
 export const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
@@ -59,23 +64,6 @@ export function isMotionReduced(setting: MotionSetting, systemReduced: boolean):
   }
 }
 
-/** Storage is a nicety, not a requirement: Safari's private mode throws. */
-function readStoredSetting(): MotionSetting {
-  try {
-    return parseMotionSetting(localStorage.getItem(MOTION_SETTING_KEY));
-  } catch {
-    return 'auto';
-  }
-}
-
-function writeStoredSetting(setting: MotionSetting): void {
-  try {
-    localStorage.setItem(MOTION_SETTING_KEY, setting);
-  } catch {
-    // A player with storage disabled simply gets the default next visit.
-  }
-}
-
 export interface MotionPreference {
   /** Should motion be suppressed right now? Cheap; call it per spawn. */
   reduced(): boolean;
@@ -89,6 +77,12 @@ export interface MotionPreference {
 export interface MotionPreferenceOptions {
   /** Called whenever `reduced()` would start answering differently. */
   readonly onChange?: (reduced: boolean, setting: MotionSetting) => void;
+  /**
+   * Where the override is kept between visits. `src/main.ts` hands over one
+   * setting out of `ui/storage.ts`; leaving it out gives a preference that
+   * lasts exactly as long as the page does, which is what the tests want.
+   */
+  readonly storage?: SettingAccess<MotionSetting>;
 }
 
 /**
@@ -100,7 +94,7 @@ export interface MotionPreferenceOptions {
  */
 export function createMotionPreference(options: MotionPreferenceOptions = {}): MotionPreference {
   const query = typeof matchMedia === 'function' ? matchMedia(REDUCED_MOTION_QUERY) : null;
-  let setting = readStoredSetting();
+  let setting = parseMotionSetting(options.storage?.read());
   let reduced = isMotionReduced(setting, query?.matches ?? false);
 
   function reconcile(): void {
@@ -119,7 +113,7 @@ export function createMotionPreference(options: MotionPreferenceOptions = {}): M
     setting: () => setting,
     cycle(): MotionSetting {
       setting = nextMotionSetting(setting);
-      writeStoredSetting(setting);
+      options.storage?.write(setting);
       reconcile();
       return setting;
     },

@@ -23,6 +23,7 @@
 
 import { BOARD_HEIGHT, BOARD_WIDTH, type GameInput } from '../engine';
 import { createAutoRepeat, type ActionId } from './input';
+import type { SettingAccess } from './storage';
 
 // ---------------------------------------------------------------------------
 // Vocabulary
@@ -442,8 +443,6 @@ export type PadPreference = 'auto' | 'on' | 'off';
 
 export const PAD_PREFERENCES: readonly PadPreference[] = ['auto', 'on', 'off'];
 
-export const PAD_PREFERENCE_KEY = 'mega-tetris:touch-pad';
-
 /** Anything unrecognised — absent, corrupt, from a future version — is `auto`. */
 export function parsePadPreference(raw: string | null | undefined): PadPreference {
   return PAD_PREFERENCES.find((value) => value === raw) ?? 'auto';
@@ -476,23 +475,6 @@ export function isPadVisible(preference: PadPreference, touchLikely: boolean): b
       return false;
     case 'auto':
       return touchLikely;
-  }
-}
-
-/** Storage is a nicety, not a requirement: Safari's private mode throws. */
-function readStoredPreference(): PadPreference {
-  try {
-    return parsePadPreference(localStorage.getItem(PAD_PREFERENCE_KEY));
-  } catch {
-    return 'auto';
-  }
-}
-
-function writeStoredPreference(preference: PadPreference): void {
-  try {
-    localStorage.setItem(PAD_PREFERENCE_KEY, preference);
-  } catch {
-    // A player with storage disabled simply gets the default next visit.
   }
 }
 
@@ -560,6 +542,8 @@ export interface TouchControlsOptions {
   readonly onAction: (action: TouchAction) => void;
   /** Called only when the *player* changes the setting, never on startup. */
   readonly onPreferenceChange?: (preference: PadPreference, visible: boolean) => void;
+  /** Where the pad's visibility is kept between visits; see `ui/motion.ts`. */
+  readonly storage?: SettingAccess<PadPreference>;
 }
 
 export interface TouchControls {
@@ -615,7 +599,7 @@ export function createTouchControls(options: TouchControlsOptions): TouchControl
   const repeat = createAutoRepeat((action) => options.onAction(action as TouchAction));
 
   const touchQuery = typeof matchMedia === 'function' ? matchMedia(TOUCH_LIKELY_QUERY) : null;
-  let preference = readStoredPreference();
+  let preference = parsePadPreference(options.storage?.read());
 
   /** Rect of the play surface, re-read whenever a gesture starts. */
   let rect = surface.getBoundingClientRect();
@@ -799,7 +783,7 @@ export function createTouchControls(options: TouchControlsOptions): TouchControl
 
   function onToggleClick(): void {
     preference = nextPadPreference(preference);
-    writeStoredPreference(preference);
+    options.storage?.write(preference);
     applyPreference();
     options.onPreferenceChange?.(preference, padVisible());
   }
