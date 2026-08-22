@@ -110,6 +110,9 @@ job and holds no rules of its own:
 | `loop.ts`     | `requestAnimationFrame` timing, delta clamping, pause when hidden.     |
 | `shell.ts`    | Builds the DOM: canvases, readouts, overlay, buttons, live region.     |
 | `hud.ts`      | Score/level/lines, overlay copy, screen-reader announcements.          |
+| `effects.ts`  | Flashes, shards, dust, popups and shake, driven by engine events.      |
+| `audio.ts`    | Synthesised cues — oscillators and envelopes, no audio files.          |
+| `motion.ts`   | How much movement the player wants: the OS preference and the toggle.  |
 
 Canvases are sized to their CSS box times `devicePixelRatio` and redrawn from a
 `ResizeObserver`, so the grid stays crisp on any display. The two rows above the
@@ -138,8 +141,59 @@ below it. The page itself never scrolls — the field shrinks instead.
 
 Verified at 320x568, 375x812, 768x1024, 1440x900 and 800x400: no horizontal
 overflow, no page scrolling, and the whole 22-row field visible in every case.
-`prefers-reduced-motion` drops the button transitions, and `prefers-contrast:
-more` brightens the palette in both the chrome and the canvas.
+`prefers-contrast: more` brightens the palette in both the chrome and the
+canvas.
+
+## Feel: effects and sound
+
+The engine says *what* happened; `src/ui/effects.ts` and `src/ui/audio.ts`
+decide how it feels. Nothing flows back the other way, so the rules stay
+deterministic and every celebration is disposable.
+
+| Event      | What you see                                                          | What you hear                     |
+| ---------- | --------------------------------------------------------------------- | --------------------------------- |
+| Line clear | Cleared rows flash white and shrink; shards fly in their block colours. | A chord, higher for more rows.    |
+| Quad       | Twice the shards, a brighter flash, a few pixels of screen shake, a `QUAD` label. | The same chord, up a fifth and a note fuller. |
+| Back to back | A harder shake and a `BACK TO BACK` label.                           | —                                 |
+| Hard drop  | A streak down the piece's columns, dust at the landing row, the locked cells squash. | A whoosh into a thud.    |
+| Level up   | The well's lip lights up and the new level reads across the field, gone in under a second. | Three notes up a major triad. |
+| Game over  | The stack greys out row by row from the floor, then the panel fades in. | Three notes down.                |
+| Score      | A `+800` label rises out of the clear; the HUD score counts up to it.  | —                                 |
+
+Every sound is synthesised on the spot from oscillators and gain envelopes —
+there is not one audio file in the repository. The musical decisions live in
+`cueTones`, a pure function from cue to a list of tones, which is why "a quad is
+a fifth above a single" is a unit test rather than a matter of opinion. The
+`AudioContext` is not created until the player's first tap or keypress (browsers
+block it before that) and a suspended context is nudged rather than assumed. The
+**Sound** button mutes it; the choice is remembered in `localStorage` under
+`mega-tetris:muted`.
+
+Effects are measured in cells, not pixels, so a burst looks the same on a phone
+and a desktop, and every particle, label and flash comes from a fixed-size pool
+built once — a quad clear allocates nothing per frame. The pool caps at 168
+shards; a burst that would overflow it thins out rather than growing.
+
+Measured in Chromium at 1280x900: a real in-game back-to-back quad peaked at 164
+live shards across 89 sampled frames with a median frame of **16.7 ms**, a worst
+frame of **16.8 ms** and nothing over 20 ms — a locked 60fps. Rendered on its own
+against a 300x660 canvas, the whole effects layer costs **0.2 ms median, 0.3 ms
+p95** per frame while a quad is in flight.
+
+### Reduced motion
+
+`prefers-reduced-motion: reduce` is honoured, read through `matchMedia` so
+flipping it in system settings takes effect without a reload. With motion off
+there are no particles, no shake, no rise on the score labels and no count-up;
+the cleared rows get a held, static highlight instead, the game-over grey lands
+in one step and the panel appears without a fade. The information is all still
+there — only the movement goes.
+
+The **Effects** button overrides it in both directions (auto → full → reduced),
+because plenty of people want calm effects in one game and not across their whole
+machine. It persists under `mega-tetris:motion`, and the decision is published to
+the stylesheet as `data-motion` on the root element so the CSS transitions follow
+exactly the same rule the canvas does.
 
 ## Controls
 
@@ -204,6 +258,9 @@ while playing; `touch-action: manipulation` on the controls keeps taps instant
 without giving double-tap zoom back. Locks and line clears get a short
 `navigator.vibrate` where the device supports it, silenced by
 `prefers-reduced-motion`.
+
+Below the well, three quiet buttons hold the three settings that persist:
+**Touchpad**, **Sound** and **Effects**.
 
 Verified with touch emulation at 390x664, 412x823, 320x568, 812x375 (landscape)
 and 768x1024: every gesture and button lands the right action, nothing scrolls,

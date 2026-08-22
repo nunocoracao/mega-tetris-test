@@ -95,9 +95,21 @@ export function describeEvent(event: GameEvent): string | null {
   }
 }
 
+/** The two things the HUD cannot read off the snapshot. */
+export interface HudView {
+  /** Whether the player is on a touch device, which changes the help copy. */
+  readonly touch?: boolean;
+  /**
+   * The number to put in the score box. The effects layer walks this up to the
+   * engine's score over a few hundred milliseconds; leave it out to show the
+   * real one.
+   */
+  readonly score?: number;
+}
+
 export interface Hud {
   /** Push the state into the DOM. Cheap to call every frame. */
-  render(state: GameState, touch?: boolean): void;
+  render(state: GameState, view?: HudView): void;
   /** Say something in the live region. */
   announce(message: string): void;
 }
@@ -113,19 +125,26 @@ export function createHud(shell: Shell): Hud {
   let lastStatus: GameState['status'] | null = null;
 
   return {
-    render(state: GameState, touch = false): void {
-      setText(shell.score, formatNumber(state.score));
+    render(state: GameState, view: HudView = {}): void {
+      const shown = view.score ?? state.score;
+      setText(shell.score, formatNumber(shown));
+      // Lit while the counter is still catching up — the readout's own little
+      // "something just happened", and free of any animation of its own.
+      shell.score.classList.toggle('score--counting', shown !== state.score);
       setText(shell.level, formatNumber(state.level));
       setText(shell.lines, formatNumber(state.lines));
       setText(shell.playButton, playButtonLabel(state));
 
-      const overlay = overlayContent(state, touch);
+      const overlay = overlayContent(state, view.touch ?? false);
       if (overlay === null) {
         shell.overlay.hidden = true;
       } else {
         setText(shell.overlayTitle, overlay.title);
         setText(shell.overlayHint, overlay.hint);
         setText(shell.overlayButton, overlay.button);
+        // The stylesheet fades the game-over panel in behind the field sweep;
+        // the status is how it knows which panel this is.
+        shell.overlay.dataset['state'] = state.status;
         shell.overlay.hidden = false;
       }
 

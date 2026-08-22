@@ -33,6 +33,10 @@ export interface Shell {
   readonly touchPad: HTMLElement;
   /** Cycles the pad between auto, forced on and forced off. */
   readonly padToggle: HTMLButtonElement;
+  /** Mutes and unmutes the synthesised cues. */
+  readonly soundToggle: HTMLButtonElement;
+  /** Cycles effects between following the system, full and reduced. */
+  readonly motionToggle: HTMLButtonElement;
   /** `aria-live="polite"` region for pauses, level ups and game over. */
   readonly status: HTMLElement;
 }
@@ -134,6 +138,8 @@ export function createShell(root: HTMLElement): Shell {
         <button type="button" class="button button--primary" data-play>Play</button>
         <button type="button" class="button" data-restart>Restart</button>
         <button type="button" class="button button--quiet" data-pad-toggle>Touchpad: Auto</button>
+        <button type="button" class="button button--quiet" data-sound-toggle>Sound: On</button>
+        <button type="button" class="button button--quiet" data-motion-toggle>Effects: Auto</button>
       </div>
 
       <section class="pad" aria-label="On-screen controls" data-pad hidden>
@@ -160,6 +166,8 @@ export function createShell(root: HTMLElement): Shell {
     restartButton: must<HTMLButtonElement>(root, '[data-restart]'),
     touchPad: must<HTMLElement>(root, '[data-pad]'),
     padToggle: must<HTMLButtonElement>(root, '[data-pad-toggle]'),
+    soundToggle: must<HTMLButtonElement>(root, '[data-sound-toggle]'),
+    motionToggle: must<HTMLButtonElement>(root, '[data-motion-toggle]'),
     status: must<HTMLElement>(root, '[data-status]'),
   };
 }
