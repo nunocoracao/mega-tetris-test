@@ -1,8 +1,27 @@
+/*
+ * Layout and chrome for the game shell.
+ *
+ * Deliberately plain: the visual identity is a later job. What this file does
+ * commit to is structure — a centred well flanked by two rails that fold under
+ * it on a narrow screen — plus the accessibility basics: visible focus rings,
+ * generous contrast, and no motion for anyone who has asked for less of it.
+ */
+
 :root {
   color-scheme: dark;
-  --bg: #131228;
+
+  --bg: #0d0c20;
+  --surface: #171639;
+  --surface-raised: #221f52;
+  --well: #12112a;
+  --edge: #332f6b;
   --fg: #f4f1ff;
+  --fg-muted: #b7b1e0;
   --accent: #ffd166;
+  --accent-ink: #221a05;
+
+  --radius: 0.75rem;
+  --gap: 0.9rem;
 
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.5;
@@ -17,13 +36,283 @@ body {
   min-height: 100svh;
   display: grid;
   place-items: center;
+  padding: clamp(0.75rem, 2vw, 1.5rem);
   background: var(--bg);
   color: var(--fg);
 }
 
-h1 {
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --------------------------------------------------------------- layout -- */
+
+.game {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--gap);
+  width: 100%;
+  max-width: 60rem;
+}
+
+.game__header {
+  text-align: center;
+}
+
+.game__title {
   margin: 0;
-  font-size: clamp(2rem, 8vw, 3.5rem);
+  font-size: clamp(1.5rem, 4vw, 2.25rem);
   letter-spacing: -0.02em;
   color: var(--accent);
+}
+
+.game__body {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--gap);
+  width: 100%;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  flex: 0 0 9rem;
+  min-width: 0;
+}
+
+.game__actions {
+  display: flex;
+  gap: 0.6rem;
+}
+
+/* ----------------------------------------------------------- playfield -- */
+
+/*
+ * 22 rows, not 20: the two extra are the spawn strip the renderer paints above
+ * the well, so a new piece is visible the moment it appears.
+ */
+.playfield {
+  position: relative;
+  aspect-ratio: 10 / 22;
+  height: min(74svh, 40rem);
+  max-width: 100%;
+  border-radius: var(--radius);
+}
+
+.playfield:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.playfield__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1rem;
+  text-align: center;
+}
+
+.overlay[hidden] {
+  display: none;
+}
+
+.overlay__title {
+  margin: 0;
+  font-size: clamp(1.4rem, 5vw, 2rem);
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.overlay__hint {
+  margin: 0;
+  max-width: 18rem;
+  color: var(--fg);
+  text-wrap: balance;
+}
+
+/* --------------------------------------------------------------- panels -- */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  padding: 0.7rem;
+}
+
+.panel__title {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.panel__canvas {
+  display: block;
+  width: 100%;
+  border-radius: 0.5rem;
+  background: var(--surface);
+}
+
+.panel__canvas--next {
+  aspect-ratio: 1 / 2.2;
+}
+
+.panel__canvas--hold {
+  aspect-ratio: 1 / 0.8;
+}
+
+.stats {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.stats__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.stats__label {
+  font-size: 0.8rem;
+  color: var(--fg-muted);
+}
+
+.stats__value {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.controls {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+}
+
+.controls__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.controls__keys {
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.controls__label {
+  margin: 0;
+  color: var(--fg-muted);
+  text-align: right;
+}
+
+/* -------------------------------------------------------------- buttons -- */
+
+.button {
+  font: inherit;
+  font-weight: 600;
+  padding: 0.5rem 1.1rem;
+  border-radius: 999px;
+  border: 1px solid var(--edge);
+  background: var(--surface-raised);
+  color: var(--fg);
+  cursor: pointer;
+  transition: transform 120ms ease, background-color 120ms ease;
+}
+
+.button:hover {
+  background: #2c2a66;
+}
+
+.button:active {
+  transform: translateY(1px);
+}
+
+.button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.button--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.button--primary:hover {
+  background: #ffdd8c;
+}
+
+/* ------------------------------------------------------------ responsive -- */
+
+@media (max-width: 46rem) {
+  .game__body {
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .rail {
+    flex: 0 0 auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    width: 100%;
+  }
+
+  .rail .panel {
+    flex: 1 1 8rem;
+    max-width: 12rem;
+  }
+
+  .panel--controls {
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .playfield {
+    height: min(66svh, 32rem);
+    order: -1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .button {
+    transition: none;
+  }
+
+  .button:active {
+    transform: none;
+  }
 }
