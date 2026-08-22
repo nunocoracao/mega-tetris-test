@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import { PIECE_KINDS } from './pieces';
-import { createBag, createRandom, shuffle } from './random';
+import {
+  createBag,
+  createBagState,
+  createRandom,
+  drawPiece,
+  drawPieces,
+  shuffle,
+  type BagState,
+} from './random';
 import type { PieceKind } from './types';
 
 function take(seed: number, count: number): PieceKind[] {
@@ -125,5 +133,49 @@ describe('createBag', () => {
 
   it('agrees between preview and next for the same seed', () => {
     expect(createBag(77).preview(20)).toEqual(take(77, 20));
+  });
+});
+
+describe('BagState', () => {
+  it('deals the same stream as the stateful bag', () => {
+    let bag = createBagState(77);
+    const drawn: PieceKind[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      const step = drawPiece(bag);
+      bag = step.bag;
+      drawn.push(step.kind);
+    }
+    expect(drawn).toEqual(take(77, 20));
+  });
+
+  it('draws several at once, in the same order', () => {
+    const batch = drawPieces(createBagState(9), 12);
+    expect(batch.kinds).toEqual(take(9, 12));
+    expect(batch.kinds).toHaveLength(12);
+  });
+
+  it('leaves the bag it was given untouched', () => {
+    const bag = createBagState(4);
+    const before = structuredClone(bag);
+    drawPiece(bag);
+    drawPieces(bag, 9);
+    expect(bag).toEqual(before);
+  });
+
+  it('carries on from a copied snapshot exactly as the original would', () => {
+    const partway = drawPieces(createBagState(31), 9).bag;
+    const copy: BagState = structuredClone(partway);
+    expect(drawPieces(copy, 7).kinds).toEqual(drawPieces(partway, 7).kinds);
+  });
+
+  it('draws nothing for a non-positive count', () => {
+    const bag = createBagState(1);
+    expect(drawPieces(bag, 0)).toEqual({ bag, kinds: [] });
+    expect(drawPieces(bag, -2).kinds).toEqual([]);
+  });
+
+  it('is plain, serialisable data', () => {
+    const bag = drawPieces(createBagState(12), 3).bag;
+    expect(JSON.parse(JSON.stringify(bag))).toEqual(bag);
   });
 });

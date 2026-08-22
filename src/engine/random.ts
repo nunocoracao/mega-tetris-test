@@ -15,18 +15,28 @@ import type { PieceKind } from './types';
 export type RandomFn = () => number;
 
 /**
- * mulberry32: advance a 32-bit state, then avalanche it into a float.
- * All the arithmetic is forced back into 32 bits with `| 0` / `>>> 0` so the
- * sequence is identical wherever it runs.
+ * One step of mulberry32: advance a 32-bit state, then avalanche it into a
+ * float. All the arithmetic is forced back into 32 bits with `| 0` / `>>> 0`
+ * so the sequence is identical wherever it runs.
+ *
+ * This is the pure form — state in, state and value out — so a generator can
+ * live inside an immutable snapshot instead of a closure.
  */
+export function randomStep(state: number): { state: number; value: number } {
+  const next = (state + 0x6d2b79f5) >>> 0;
+  let t = next;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return { state: next, value: ((t ^ (t >>> 14)) >>> 0) / 4294967296 };
+}
+
+/** A stateful generator over `randomStep`, for code that just wants numbers. */
 export function createRandom(seed: number): RandomFn {
   let state = seed >>> 0;
   return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    const stepped = randomStep(state);
+    state = stepped.state;
+    return stepped.value;
   };
 }
 
@@ -44,6 +54,73 @@ export function shuffle<T>(items: readonly T[], random: RandomFn): T[] {
     out[j] = a;
   }
   return out;
+}
+
+/** Fisher-Yates over an explicit PRNG state; returns the shuffle and the state. */
+export function shuffleWithState<T>(items: readonly T[], state: number): { items: T[]; state: number } {
+  let current = state;
+  const shuffled = shuffle(items, () => {
+    const stepped = randomStep(current);
+    current = stepped.state;
+    return stepped.value;
+  });
+  return { items: shuffled, state: current };
+}
+
+/**
+ * A 7-bag generator as **plain data**: the PRNG state plus the kinds already
+ * dealt out of the current bag but not yet taken.
+ *
+ * The game state is an immutable snapshot that has to compare deeply equal
+ * across identical replays, so the piece stream cannot hide in a closure —
+ * it has to be a value we can copy around like everything else.
+ */
+export interface BagState {
+  /** mulberry32 state, advanced once per shuffle. */
+  readonly random: number;
+  /** Kinds dealt but not yet drawn, oldest first. */
+  readonly queue: readonly PieceKind[];
+}
+
+/** A fresh, empty bag. The first draw shuffles a full set of seven. */
+export function createBagState(seed: number): BagState {
+  return { random: seed >>> 0, queue: [] };
+}
+
+/** Top the queue up to at least `count` kinds by shuffling in whole bags. */
+function refill(bag: BagState, count: number): BagState {
+  if (bag.queue.length >= count) {
+    return bag;
+  }
+  let random = bag.random;
+  const queue = [...bag.queue];
+  while (queue.length < count) {
+    const shuffled = shuffleWithState(PIECE_KINDS, random);
+    queue.push(...shuffled.items);
+    random = shuffled.state;
+  }
+  return { random, queue };
+}
+
+/** Take the next kind, returning it alongside the advanced bag. */
+export function drawPiece(bag: BagState): { bag: BagState; kind: PieceKind } {
+  const filled = refill(bag, 1);
+  return {
+    bag: { random: filled.random, queue: filled.queue.slice(1) },
+    kind: filled.queue[0] as PieceKind,
+  };
+}
+
+/** Take the next `count` kinds in order, returning them and the advanced bag. */
+export function drawPieces(bag: BagState, count: number): { bag: BagState; kinds: PieceKind[] } {
+  if (count <= 0) {
+    return { bag, kinds: [] };
+  }
+  const filled = refill(bag, count);
+  return {
+    bag: { random: filled.random, queue: filled.queue.slice(count) },
+    kinds: filled.queue.slice(0, count),
+  };
 }
 
 /** A stream of pieces. */
@@ -64,26 +141,21 @@ export interface Bag {
  * random.
  */
 export function createBag(seed: number): Bag {
-  const random = createRandom(seed);
-  let queue: PieceKind[] = [];
-
-  const refillTo = (count: number): void => {
-    while (queue.length < count) {
-      queue.push(...shuffle(PIECE_KINDS, random));
-    }
-  };
+  let bag = createBagState(seed);
 
   return {
     next(): PieceKind {
-      refillTo(1);
-      return queue.shift() as PieceKind;
+      const drawn = drawPiece(bag);
+      bag = drawn.bag;
+      return drawn.kind;
     },
     preview(count: number): PieceKind[] {
       if (count <= 0) {
         return [];
       }
-      refillTo(count);
-      return queue.slice(0, count);
+      // Peek without consuming: keep the refilled bag, hand back a copy.
+      bag = refill(bag, count);
+      return bag.queue.slice(0, count);
     },
   };
 }
