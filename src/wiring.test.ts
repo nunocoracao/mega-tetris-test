@@ -73,6 +73,19 @@ describe('the composition root', () => {
 
 });
 
+describe('the engine boundary', () => {
+  // `src/engine/index.ts` is the public surface. Reaching around it into
+  // `../engine/game` works today and pins the UI to a file layout the engine
+  // should be free to change; the barrel is the contract.
+  const browserFiles = sources(SRC_DIR).filter((name) => !name.startsWith('engine/'));
+
+  it.each(browserFiles)('%s imports the engine through its barrel', (name) => {
+    const code = stripComments(readFileSync(join(SRC_DIR, name), 'utf8'));
+    const deep = [...code.matchAll(/from '\.{1,2}\/(?:\.\.\/)?engine\/[^']+'/g)].map((m) => m[0]);
+    expect(deep).toEqual([]);
+  });
+});
+
 describe('the storage boundary', () => {
   // `ui/storage.ts` is the only file allowed to touch `localStorage`, which is
   // what keeps the "storage may be hostile" handling — and the stored format —
