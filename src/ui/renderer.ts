@@ -4,8 +4,9 @@
  * The renderer is a painter and nothing else: hand it a `GameState` and it
  * paints that snapshot. It holds no rules, mutates no state and asks the
  * engine no questions beyond the pure queries the engine already exposes
- * (`ghostPiece`, `getCells`). Every colour comes from `./palette`, so the
- * visual identity can be redone without touching a single draw call here.
+ * (`ghostPiece`, `getCells`). Every colour comes from `./palette`, which reads
+ * it from the stylesheet's custom properties, so the visual identity can be
+ * redone in CSS without touching a single draw call here.
  *
  * Everything below works in **device pixels**, not CSS pixels: the backing
  * store is sized to `clientSize * devicePixelRatio` and the drawing code
@@ -23,14 +24,7 @@ import {
   type PieceKind,
   type Rotation,
 } from '../engine';
-import {
-  GHOST_ALPHA,
-  GRID_ALPHA,
-  PIECE_PALETTE,
-  SURFACE_PALETTE,
-  withAlpha,
-  type BlockColor,
-} from './palette';
+import { GHOST_ALPHA, GRID_ALPHA, getPalette, withAlpha, type BlockColor } from './palette';
 
 /**
  * How strongly the spawn strip above the well is painted. Enough to see the
@@ -212,7 +206,14 @@ function roundedRectPath(
   ctx.closePath();
 }
 
-/** A solid block: flat face, lit top edge, shaded outline. */
+/**
+ * A solid block, lit from above.
+ *
+ * All of the dimension is arithmetic, not artwork: a flat face, a lit band
+ * across the top, a shaded band across the bottom, a hairline inner highlight
+ * just inside the top edge and a darker outline around the whole thing. Four
+ * clipped rectangles and two strokes — cheap enough to do 220 times a frame.
+ */
 function drawBlock(
   ctx: CanvasRenderingContext2D,
   x: number,
@@ -227,18 +228,32 @@ function drawBlock(
   if (side <= 0) {
     return;
   }
-  const radius = Math.max(1, Math.round(size * 0.18));
+  const radius = Math.max(1, Math.round(size * 0.2));
+  const band = Math.max(1, Math.round(side * 0.26));
 
   roundedRectPath(ctx, left, top, side, side, radius);
   ctx.fillStyle = color.fill;
   ctx.fill();
 
-  // A bevel across the top third reads as light without costing a gradient.
   ctx.save();
   ctx.clip();
   ctx.fillStyle = withAlpha(color.light, 0.5);
-  ctx.fillRect(left, top, side, Math.max(1, Math.round(side * 0.3)));
+  ctx.fillRect(left, top, side, band);
+  ctx.fillStyle = withAlpha(color.shade, 0.45);
+  ctx.fillRect(left, top + side - band, side, band);
+  // A short gloss in the top-left corner: the one bit of shine on the block.
+  ctx.fillStyle = withAlpha(color.light, 0.35);
+  ctx.fillRect(left, top, Math.max(1, Math.round(side * 0.3)), Math.round(side * 0.55));
   ctx.restore();
+
+  // Inner highlight, then the darker edge over it, so the two never overlap.
+  if (side > 6) {
+    const line = Math.max(1, Math.round(size * 0.04));
+    ctx.strokeStyle = withAlpha(color.light, 0.4);
+    ctx.lineWidth = line;
+    roundedRectPath(ctx, left + line, top + line, side - line * 2, side - line * 2, radius - line);
+    ctx.stroke();
+  }
 
   ctx.strokeStyle = color.shade;
   ctx.lineWidth = Math.max(1, Math.round(size * 0.05));
@@ -298,6 +313,7 @@ export function createBoardRenderer(canvas: HTMLCanvasElement): Renderer<GameSta
 
   function paint(state: GameState): void {
     const { ctx, width, height } = surface.surface();
+    const { pieces, surfaces } = getPalette();
     const { board } = state;
     const hidden = hiddenRowCount(board);
 
@@ -311,10 +327,14 @@ export function createBoardRenderer(canvas: HTMLCanvasElement): Renderer<GameSta
 
     ctx.clearRect(0, 0, width, height);
 
-    ctx.fillStyle = SURFACE_PALETTE.well;
+    // The well deepens toward the floor, so the stack has something to sit on.
+    const wellFill = ctx.createLinearGradient(0, wellY, 0, wellY + wellHeight);
+    wellFill.addColorStop(0, surfaces.well);
+    wellFill.addColorStop(1, surfaces.wellDeep);
+    ctx.fillStyle = wellFill;
     ctx.fillRect(layout.x, wellY, layout.width, wellHeight);
 
-    ctx.strokeStyle = withAlpha(SURFACE_PALETTE.gridLine, GRID_ALPHA);
+    ctx.strokeStyle = withAlpha(surfaces.gridLine, GRID_ALPHA);
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let col = 1; col < board.width; col += 1) {
@@ -343,7 +363,7 @@ export function createBoardRenderer(canvas: HTMLCanvasElement): Renderer<GameSta
           layout.x + x * layout.cell,
           layout.y + y * layout.cell,
           layout.cell,
-          PIECE_PALETTE[cell],
+          pieces[cell],
         );
       }
     }
@@ -352,23 +372,24 @@ export function createBoardRenderer(canvas: HTMLCanvasElement): Renderer<GameSta
     // Ghost first, so the real piece always paints over it.
     const ghost = ghostPiece(state);
     if (ghost !== null && state.active !== null && ghost.y !== state.active.y) {
-      drawPiece(ctx, ghost, layout, hidden, drawGhostBlock);
+      drawPiece(ctx, ghost, layout, hidden, drawGhostBlock, pieces);
     }
     if (state.active !== null) {
-      drawPiece(ctx, state.active, layout, hidden, drawBlock);
+      drawPiece(ctx, state.active, layout, hidden, drawBlock, pieces);
     }
 
     // Everything but a live game gets a veil, so the DOM overlay reads clearly.
     if (state.status !== 'playing') {
-      ctx.fillStyle = withAlpha(SURFACE_PALETTE.veil, 0.55);
+      ctx.fillStyle = withAlpha(surfaces.veil, 0.55);
       ctx.fillRect(layout.x, layout.y, layout.width, layout.height);
     }
 
     // Frame last, on top of the veil: it is what separates the well from the
     // spawn strip above it, so it scales with the cells rather than staying a
-    // hairline on a big screen.
-    const frameWidth = Math.max(2, Math.round(layout.cell * 0.08));
-    ctx.strokeStyle = SURFACE_PALETTE.frame;
+    // hairline on a big screen. The CSS bezel around the canvas does the outer
+    // glow; this line is the inner lip of the cabinet.
+    const frameWidth = Math.max(1, Math.round(layout.cell * 0.06));
+    ctx.strokeStyle = withAlpha(surfaces.frame, 0.9);
     ctx.lineWidth = frameWidth;
     ctx.strokeRect(
       layout.x + frameWidth / 2,
@@ -409,8 +430,9 @@ function drawPiece(
   layout: GridLayout,
   hiddenRows: number,
   painter: BlockPainter,
+  pieces: Readonly<Record<PieceKind, BlockColor>>,
 ): void {
-  const color = PIECE_PALETTE[piece.kind];
+  const color = pieces[piece.kind];
   for (const offset of getCells(piece.kind, piece.rotation)) {
     const row = piece.y + offset.y;
     if (row < 0) {
@@ -466,27 +488,40 @@ export function createPiecePanelRenderer(
 
   function paint(value: PiecePanelValue): void {
     const { ctx, width, height } = surface.surface();
+    const { pieces, surfaces } = getPalette();
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = SURFACE_PALETTE.panel;
+    ctx.fillStyle = surfaces.panel;
     ctx.fillRect(0, 0, width, height);
 
-    // The first slot gets extra height when emphasised; the rest share the rest.
+    // The queue runs down a tall canvas and across a wide one, so the narrow
+    // layout can lay the preview out as a strip without a second renderer.
+    const horizontal = width > height;
+    const span = horizontal ? width : height;
+
+    // The first slot gets extra room when emphasised; the rest share the rest.
     const firstShare = options.emphasiseFirst === true && slots > 1 ? 1.35 : 1;
-    const shareTotal = firstShare + (slots - 1);
-    const unit = height / shareTotal;
+    const unit = span / (firstShare + (slots - 1));
 
     ctx.save();
     // Dimmed, but not so far that the colour stops reading as its own piece.
     ctx.globalAlpha = value.dimmed === true ? 0.45 : 1;
 
-    let top = 0;
+    let offset = 0;
     for (let slot = 0; slot < slots; slot += 1) {
-      const slotHeight = (slot === 0 ? firstShare : 1) * unit;
+      const extent = (slot === 0 ? firstShare : 1) * unit;
       const kind = value.kinds[slot] ?? null;
       if (kind !== null) {
-        drawThumbnail(ctx, kind, 0, top, width, slotHeight);
+        drawThumbnail(
+          ctx,
+          pieces[kind],
+          kind,
+          horizontal ? offset : 0,
+          horizontal ? 0 : offset,
+          horizontal ? extent : width,
+          horizontal ? height : extent,
+        );
       }
-      top += slotHeight;
+      offset += extent;
     }
 
     ctx.restore();
@@ -507,6 +542,7 @@ export function createPiecePanelRenderer(
 /** One piece, centred in the given box, at the largest size that fits. */
 function drawThumbnail(
   ctx: CanvasRenderingContext2D,
+  color: BlockColor,
   kind: PieceKind,
   boxX: number,
   boxY: number,
@@ -516,7 +552,6 @@ function drawThumbnail(
   const extents = pieceExtents(kind);
   const padding = Math.round(Math.min(boxWidth, boxHeight) * 0.18);
   const layout = computeGridLayout(boxWidth, boxHeight, extents.width, extents.height, padding);
-  const color = PIECE_PALETTE[kind];
 
   for (const offset of getCells(kind, 0)) {
     drawBlock(

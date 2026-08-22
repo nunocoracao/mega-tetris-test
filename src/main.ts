@@ -14,6 +14,7 @@ import { applyInput, createGame, update, type GameInput, type GameState } from '
 import { createHud, describeEvent } from './ui/hud';
 import { createKeyboardInput, type ActionId } from './ui/input';
 import { createLoop } from './ui/loop';
+import { refreshPalette, watchPalette } from './ui/palette';
 import { createBoardRenderer, createPiecePanelRenderer } from './ui/renderer';
 import { createShell } from './ui/shell';
 
@@ -33,6 +34,10 @@ const root = document.querySelector<HTMLElement>('#app');
 if (root === null) {
   throw new Error('Missing the #app mount point.');
 }
+
+// The stylesheet owns every colour; read it into the renderer once the sheet
+// is applied, and again whenever a colour preference changes it underneath us.
+refreshPalette();
 
 const shell = createShell(root);
 const hud = createHud(shell);
@@ -115,6 +120,8 @@ function primaryAction(): void {
   dispatch('togglePause');
   shell.playfield.focus();
 }
+
+watchPalette(() => draw());
 
 shell.playButton.addEventListener('click', primaryAction);
 shell.overlayButton.addEventListener('click', primaryAction);
