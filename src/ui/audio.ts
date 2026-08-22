@@ -183,7 +183,8 @@ function audioContextCtor(): AudioContextCtor | null {
     return AudioContext;
   }
   // Older WebKit only has the prefixed constructor.
-  const legacy = typeof window === 'undefined' ? undefined : Reflect.get(window, 'webkitAudioContext');
+  const legacy: unknown =
+    typeof window === 'undefined' ? undefined : Reflect.get(window, 'webkitAudioContext');
   return typeof legacy === 'function' ? (legacy as AudioContextCtor) : null;
 }
 
