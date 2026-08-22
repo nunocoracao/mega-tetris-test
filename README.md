@@ -12,6 +12,8 @@ open it on a phone and drag, tap and flick.
 - [Vite](https://vite.dev) 7 for dev server and static builds
 - [TypeScript](https://www.typescriptlang.org) 5 in `strict` mode
 - [Vitest](https://vitest.dev) 3 for unit tests
+- [axe-core](https://github.com/dequelabs/axe-core) and jsdom for the
+  accessibility audit — test-time only
 
 Zero runtime dependencies — the game is plain TypeScript and CSS.
 
@@ -37,6 +39,7 @@ npm run dev     # start the dev server at http://localhost:5173
 | `npm test`           | Run the test suite once.                                 |
 | `npm run test:watch` | Run tests in watch mode.                                 |
 | `npm run typecheck`  | Typecheck without emitting output.                       |
+| `npm run a11y`       | Run the accessibility audit (axe-core) and contrast check. |
 
 The build uses a relative `base`, so the contents of `dist/` can be dropped on
 any static host or subdirectory and will work as-is.
@@ -113,6 +116,10 @@ job and holds no rules of its own:
 | `effects.ts`  | Flashes, shards, dust, popups and shake, driven by engine events.      |
 | `audio.ts`    | Synthesised cues — oscillators and envelopes, no audio files.          |
 | `motion.ts`   | How much movement the player wants: the OS preference and the toggle.  |
+| `contrast.ts` | How much contrast the player wants, and the per-piece marks.            |
+| `dialog.ts`   | Modal behaviour: focus trap, Escape, focus restoration, `inert`.        |
+| `help.ts`     | The help panel's content, generated from the bindings and the rules.    |
+| `countdown.ts`| The three, two, one between closing the pause menu and playing again.   |
 
 Canvases are sized to their CSS box times `devicePixelRatio` and redrawn from a
 `ResizeObserver`, so the grid stays crisp on any display. The two rows above the
@@ -141,8 +148,6 @@ below it. The page itself never scrolls — the field shrinks instead.
 
 Verified at 320x568, 375x812, 768x1024, 1440x900 and 800x400: no horizontal
 overflow, no page scrolling, and the whole 22-row field visible in every case.
-`prefers-contrast: more` brightens the palette in both the chrome and the
-canvas.
 
 ## Feel: effects and sound
 
@@ -208,10 +213,14 @@ exactly the same rule the canvas does.
 | `C` / `Shift`| Hold piece           |
 | `P` / `Esc` | Pause / resume        |
 | `R`         | Restart               |
+| `?` / `H`   | Help                  |
 
 Left and right auto-repeat after a 170 ms delay, then every 40 ms. The bindings
-live in `KEY_BINDINGS` in `src/ui/input.ts` and the on-screen controls list is
-generated from that table, so the two cannot drift apart.
+live in `KEY_BINDINGS` in `src/ui/input.ts` and both the on-screen controls list
+and the help panel are generated from that table, so they cannot drift apart.
+
+Keys pressed while a dialog is open belong to the dialog, so arrows scroll a long
+help panel instead of moving a piece nobody can see.
 
 ## Touch
 
@@ -259,9 +268,127 @@ without giving double-tap zoom back. Locks and line clears get a short
 `navigator.vibrate` where the device supports it, silenced by
 `prefers-reduced-motion`.
 
-Below the well, three quiet buttons hold the three settings that persist:
-**Touchpad**, **Sound** and **Effects**.
+The four settings that persist — **Sound**, **Effects**, **Contrast** and
+**Touchpad** — live in the pause menu, which is where a player goes looking for
+them and which keeps the row under the well down to three buttons on a phone.
 
 Verified with touch emulation at 390x664, 412x823, 320x568, 812x375 (landscape)
 and 768x1024: every gesture and button lands the right action, nothing scrolls,
 no target is under 44 px, and the setting survives a reload.
+
+## Accessibility
+
+The game is meant to be playable with a keyboard, a screen reader, a
+high-contrast display or all three. Everything below is checked by
+`npm run a11y` or by a unit test, not just asserted here.
+
+### Structure
+
+`<header>` with the one `<h1>`, `<main>` around the well and its readouts,
+`<footer>` for the actions — three landmarks, headings that only ever step down
+one level at a time, and a real `<button>` with an accessible name behind every
+control. The touch pad's buttons carry an `aria-label` and hide their glyph from
+assistive technology, so a screen reader says "Rotate left" rather than reading
+out an arrow.
+
+### The well, in words
+
+The playfield canvas is not an opaque box. It is `role="img"`, labelled by a
+visually hidden paragraph that `ui/hud.ts` keeps current:
+
+> Playfield, 10 columns wide. The stack is 6 rows high, of 20. Score 1,200,
+> level 2, 14 lines cleared. Falling piece: T. Next: I, then O, then S.
+> Holding L.
+
+It says nothing about *where* the falling piece is, deliberately — a description
+that changed on every gravity tick would be unusable. The next queue and the hold
+slot get a hidden sentence of their own beside their thumbnails.
+
+### What gets announced
+
+One polite live region, and a high bar for what reaches it: **line clears** (with
+the count and the points), **level ups**, **pause and resume**, **game over with
+the final score**, and a confirmation when a setting changes. Locks, spawns,
+holds, moves and gravity are all silent. A live region that talks over the game
+is one players turn their screen reader off to escape.
+
+### Keyboard
+
+Full keyboard operability with no traps. Focus indicators come from a single
+`:focus-visible` baseline rule, so a control added later cannot arrive without
+one; the stylesheet contains no `outline: none` and a test says so. Tab order is
+DOM order — there is not a positive `tabindex` in the project.
+
+The pause menu and the help panel are real modal dialogs: focus moves in on
+open, is trapped while open (Tab wraps at both ends), Escape closes from
+anywhere, and focus returns to whatever opened it. Everything behind a dialog is
+marked `inert`, which takes it out of the tab order, the hit-testing and the
+accessibility tree at once — the manual focus wrap in `ui/dialog.ts` is the
+fallback for browsers that do not support it.
+
+### Help panel
+
+Press `?` or `H`, or the **Help** button, and it opens automatically on a first
+visit (remembered under `mega-tetris:seen-help`). It is a page, not a manual: a
+sentence about the goal, then the keyboard controls, the touch gestures, the
+scoring table and a note each on hold and ghost.
+
+The keyboard list is generated from `KEY_BINDINGS` and the scoring table from the
+engine's own `LINE_CLEAR_POINTS`, `SOFT_DROP_POINTS` and `HARD_DROP_POINTS`.
+Rebind a key or retune a score and the help panel follows; there is no second
+copy of either to go stale.
+
+### Pause menu
+
+Pausing opens it — Resume, Restart, Help, and the four settings (**Sound**,
+**Effects**, **Contrast**, **Touchpad**). Closing it counts you back in three,
+two, one rather than dropping you onto a falling piece, and the count runs off
+the game loop's own delta, so it stops with the tab.
+
+### Contrast and colour
+
+Every text pair meets WCAG AA (4.5:1) and every control boundary and focus ring
+meets 1.4.11 (3:1) — in both palettes. That is not a claim, it is
+`src/ui/style.test.ts`: it parses the real declarations out of `style.css`,
+composites the translucent ones, computes the ratios and fails the suite if an
+edit drops one below the bar. It also checks that high contrast is *higher* on
+every pair, not merely different.
+
+The **Contrast** setting is three-way — auto, high, standard — and `auto`
+follows `prefers-contrast: more`, read live through `matchMedia`. High contrast
+darkens the cabinet, whitens the ink, brightens the seven faces and doubles the
+weight of every control border.
+
+**And it does not rely on colour.** Each piece kind gets a mark stamped into its
+blocks — a bar for I, a ring for O, a plus for T, mirrored diagonals for S and Z,
+a pillar for J, a double bar for L — drawn in a near-black tone derived from the
+face itself, at 7:1 or better against it. S and Z are the pair that catches
+people out, so they are the pair given mirrored marks.
+
+### Running the audit
+
+```bash
+npm run a11y
+```
+
+Two files, both part of `npm test` as well:
+
+- **`src/ui/a11y.test.ts`** runs [axe-core](https://github.com/dequelabs/axe-core)
+  over the real shell in jsdom — the same `createShell` the game boots, in the
+  same document skeleton `index.html` provides — three times: dialogs closed,
+  pause menu open, help panel open. It then checks the things a static audit
+  cannot see: focus moves in and back out of a dialog, Tab wraps, Escape closes
+  and does not reach the game underneath, the background goes inert, and the live
+  region stays reachable while it is.
+- **`src/ui/style.test.ts`** does the contrast half, against the palette.
+
+jsdom rather than a browser because it is the lightest thing that actually runs
+here, and axe's `color-contrast` rule is switched off in it for a reason worth
+knowing: axe measures contrast by asking a rendering engine what pixels it
+painted, and jsdom paints nothing. Leaving the rule on would report "incomplete"
+and check nothing, so the palette test does that job properly instead.
+
+Manually walked as well, in Chromium at 1280x900 and on an emulated iPhone 12:
+tab order is logical in both, the focus ring is visible on every stop, the help
+panel opens at its top rather than scrolled to its last button, and the pause
+menu fits without the page scrolling.

@@ -45,10 +45,10 @@ const MAX_REPEATS_PER_FRAME = 8;
 // ---------------------------------------------------------------------------
 
 /**
- * What a key does. Everything except `togglePause` and `restart` is an engine
- * input; those two are intents the composition layer resolves against the
- * current status, because "which of pause and resume applies" is not the
- * keyboard's business.
+ * What a key does. Everything except `togglePause`, `restart` and `help` is an
+ * engine input; those three are intents the composition layer resolves — which
+ * of pause and resume applies, whether a restart replays the seed, and what a
+ * help panel even is are none of the keyboard's business.
  */
 export type ActionId =
   | 'moveLeft'
@@ -59,7 +59,8 @@ export type ActionId =
   | 'rotateCCW'
   | 'hold'
   | 'togglePause'
-  | 'restart';
+  | 'restart'
+  | 'help';
 
 /** How an action behaves while its key stays down. */
 export type RepeatMode =
@@ -93,6 +94,7 @@ export const KEY_BINDINGS: readonly KeyBinding[] = [
   { action: 'hold', label: 'Hold piece', keys: ['C', 'Shift'], repeat: 'none' },
   { action: 'togglePause', label: 'Pause / resume', keys: ['P', 'Escape'], repeat: 'none' },
   { action: 'restart', label: 'Restart', keys: ['R'], repeat: 'none' },
+  { action: 'help', label: 'Help', keys: ['?', 'H'], repeat: 'none' },
 ];
 
 /** Lookup table built once from `KEY_BINDINGS`. Keys are unique — a test says so. */
@@ -320,11 +322,23 @@ export interface KeyboardInput {
 /** Keys pressed while one of these has focus belong to the control, not the game. */
 const INTERACTIVE_TAGS = new Set(['BUTTON', 'INPUT', 'SELECT', 'TEXTAREA', 'A']);
 
+/**
+ * Does this key belong to something other than the game?
+ *
+ * Two cases. A control with focus owns its own keys — space on a button is a
+ * press, not a hard drop. And **anything inside an open dialog belongs to the
+ * dialog**: the pause menu and the help panel are modal, so while one is up
+ * every key is theirs, right down to the arrows that scroll a long help panel.
+ * Without that second rule the game would eat the scroll.
+ */
 function isInteractiveTarget(target: EventTarget | null): boolean {
   if (target === null || !(target instanceof HTMLElement)) {
     return false;
   }
-  return INTERACTIVE_TAGS.has(target.tagName) || target.isContentEditable;
+  if (INTERACTIVE_TAGS.has(target.tagName) || target.isContentEditable) {
+    return true;
+  }
+  return target.closest('[role="dialog"]') !== null;
 }
 
 /**

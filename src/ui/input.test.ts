@@ -28,6 +28,7 @@ describe('key bindings', () => {
       'hold',
       'togglePause',
       'restart',
+      'help',
     ];
 
     expect([...actions].sort()).toEqual([...expected].sort());

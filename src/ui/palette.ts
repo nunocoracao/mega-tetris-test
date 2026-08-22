@@ -20,11 +20,21 @@
 
 import { PIECE_KINDS, type PieceKind } from '../engine';
 
-/** One block's three tones: the face, its lit bevel and its shaded edge. */
+/**
+ * One block's four tones: the face, its lit bevel, its shaded edge, and the
+ * near-black outline high-contrast mode draws around it.
+ */
 export interface BlockColor {
   readonly fill: string;
   readonly light: string;
   readonly shade: string;
+  /**
+   * A much darker relative of the face, for the heavy outline high-contrast
+   * mode wants. Derived rather than declared, exactly like the bevels: the
+   * stylesheet names seven faces, and everything a block needs comes out of
+   * arithmetic on them.
+   */
+  readonly outline: string;
 }
 
 /** Colours for everything that is not a block: the well, its grid and frame. */
@@ -91,7 +101,7 @@ export const DEFAULT_SURFACE_HEX: Readonly<Record<keyof SurfaceColors, string>> 
   well: '#1a1126',
   wellDeep: '#100a19',
   gridLine: '#ffffff',
-  frame: '#5a4478',
+  frame: '#7d68a5',
   panel: '#1d1529',
   veil: '#0b0712',
   accent: '#ffc857',
@@ -105,6 +115,13 @@ const SHADOW = '#170f22';
 /** How far the bevels travel from the face colour. */
 const LIGHT_MIX = 0.5;
 const SHADE_MIX = 0.52;
+
+/**
+ * How far the high-contrast outline travels. Far enough that the ring around a
+ * block reads as a boundary in its own right — every face is bright, so a very
+ * dark relative of it clears 3:1 against both the face and the well.
+ */
+const OUTLINE_MIX = 0.86;
 
 /** How strongly the ghost piece is painted, as fill and outline alpha. */
 export const GHOST_ALPHA = { fill: 0.16, stroke: 0.7 } as const;
@@ -177,6 +194,7 @@ export function blockColor(fill: string): BlockColor {
     fill: face,
     light: mixHex(face, HIGHLIGHT, LIGHT_MIX),
     shade: mixHex(face, SHADOW, SHADE_MIX),
+    outline: mixHex(face, SHADOW, OUTLINE_MIX),
   };
 }
 

@@ -33,14 +33,25 @@
 
   --well: #1a1126;
   --well-deep: #100a19;
-  --field-frame: #5a4478;
+  /* 3.8:1 against the well — the lip of the cabinet has to be a boundary you
+   * can actually see, not a suggestion. */
+  --field-frame: #7d68a5;
   --field-bezel: #241a33;
   --grid-line: #ffffff;
   --veil: #0b0712;
   --overlay-veil: rgb(11 7 18 / 0.74);
 
-  --edge: #43335c;
-  --edge-soft: #33254a;
+  /*
+   * `--edge` draws every *interactive* boundary — buttons, pads, keycaps — so
+   * it carries a real requirement rather than a taste: WCAG 1.4.11 wants 3:1
+   * for anything that tells you where a control is, and a filled pill on a
+   * plum page is not doing that on its own. It clears 3.2:1 against the
+   * lightest surface it ever sits on and 4.8:1 against the darkest.
+   * `--edge-soft` is decorative only — panel rules and canvas insets around
+   * static content — and stays quiet on purpose.
+   */
+  --edge: #8b74b5;
+  --edge-soft: #3d2d59;
   --glow: rgb(148 92 226 / 0.45);
 
   /* ------------------------------------------------------------- ink --- */
@@ -82,6 +93,16 @@
   --field-block-cap: 82dvh;
   --field-inline-reserve: calc(2 * var(--rail) + 2 * var(--gap) + 2 * var(--page-pad));
 
+  /* ------------------------------------------------ contrast knobs --- */
+  /*
+   * The two structural things high contrast changes, expressed as properties
+   * so the rules that use them are written once. The high-contrast blocks
+   * override these alongside the colours; nothing else has to know.
+   */
+  --control-border-width: 1px;
+  /* `transparent` lets the title's gradient show through the text. */
+  --title-fill: transparent;
+
   /* ------------------------------------------------------------ type --- */
 
   --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
@@ -93,27 +114,92 @@
 }
 
 /*
- * More contrast on request: brighter faces, a stronger grid and a plain white
- * ink. The canvas picks these up too — `watchPalette` re-reads the custom
- * properties when the preference flips.
+ * ------------------------------------------------------------ high contrast --
+ *
+ * More contrast on request: the cabinet interior goes darker, the ink goes
+ * white, every boundary gets brighter and the seven faces are pushed up in
+ * lightness. The canvas picks all of it up — `ui/palette.ts` re-reads the
+ * custom properties whenever the preference changes — and adds two cues colour
+ * cannot carry: a heavier block outline, and a distinct mark per piece kind.
+ *
+ * **Written twice, on purpose.** The media query is what applies before the
+ * script has had its say, scoped so a player who has explicitly asked this game
+ * for standard contrast still gets it. The attribute block is `main.ts`'s
+ * decision — the system preference and the in-game toggle folded together — and
+ * is authoritative once set. CSS has no way to share one body between the two,
+ * so `style.test.ts` compares them declaration by declaration instead and fails
+ * if they ever drift.
  */
 @media (prefers-contrast: more) {
-  :root {
+  :root:not([data-contrast='off']) {
+    --cabinet: #120b1b;
+    --cabinet-deep: #06030a;
+    --cabinet-lit: #1d1429;
+    --panel: #150e20;
+    --panel-raised: #150e20;
+    --panel-hover: #2a1e3d;
+    --panel-canvas: #0c0713;
+    --well: #0a0611;
+    --well-deep: #05030a;
+    --field-frame: #c3b0e0;
+    --field-bezel: #150e20;
+    --veil: #05030a;
+    --overlay-veil: rgb(3 1 6 / 0.92);
+    --edge: #c3b0e0;
+    --edge-soft: #9b84c4;
+    --glow: transparent;
     --fg: #ffffff;
-    --fg-muted: #e4d9f5;
-    --edge: #8f79b5;
-    --field-frame: #a68fcc;
-    --well: #100a19;
-    --well-deep: #07040c;
+    --fg-muted: #f0e8ff;
+    --accent: #ffd166;
+    --accent-lit: #ffe6a8;
+    --accent-ink: #1a1000;
+    --accent-2: #ff8fb3;
+    --piece-i: #6ff5f2;
+    --piece-o: #ffdc7a;
+    --piece-t: #dfa9ff;
+    --piece-s: #a5f5a8;
+    --piece-z: #ff92a3;
+    --piece-j: #93b4ff;
+    --piece-l: #ffbe5c;
 
-    --piece-i: #5cf2ef;
-    --piece-o: #ffd979;
-    --piece-t: #d99cff;
-    --piece-s: #96f199;
-    --piece-z: #ff7f92;
-    --piece-j: #7ea5ff;
-    --piece-l: #ffb340;
+    --control-border-width: 2px;
+    --title-fill: var(--accent);
   }
+}
+
+:root[data-contrast='on'] {
+  --cabinet: #120b1b;
+  --cabinet-deep: #06030a;
+  --cabinet-lit: #1d1429;
+  --panel: #150e20;
+  --panel-raised: #150e20;
+  --panel-hover: #2a1e3d;
+  --panel-canvas: #0c0713;
+  --well: #0a0611;
+  --well-deep: #05030a;
+  --field-frame: #c3b0e0;
+  --field-bezel: #150e20;
+  --veil: #05030a;
+  --overlay-veil: rgb(3 1 6 / 0.92);
+  --edge: #c3b0e0;
+  --edge-soft: #9b84c4;
+  --glow: transparent;
+  --fg: #ffffff;
+  --fg-muted: #f0e8ff;
+  --accent: #ffd166;
+  --accent-lit: #ffe6a8;
+  --accent-ink: #1a1000;
+  --accent-2: #ff8fb3;
+  --piece-i: #6ff5f2;
+  --piece-o: #ffdc7a;
+  --piece-t: #dfa9ff;
+  --piece-s: #a5f5a8;
+  --piece-z: #ff92a3;
+  --piece-j: #93b4ff;
+  --piece-l: #ffbe5c;
+
+  --control-border-width: 2px;
+  --title-fill: var(--accent);
 }
 
 * {
@@ -164,6 +250,24 @@ body {
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
+}
+
+/* ---------------------------------------------------------------- focus -- */
+
+/*
+ * One ring, everywhere, by default.
+ *
+ * `:focus-visible` rather than `:focus`, so a mouse click on a button does not
+ * light it up, and a *baseline* rather than a per-component rule so a control
+ * added later cannot arrive without one. The accent clears 12:1 against the
+ * cabinet and 10:1 against a panel — comfortably past the 3:1 WCAG asks of a
+ * focus indicator — and the offset keeps it clear of the control's own border
+ * rather than sitting on top of it. Nothing in this stylesheet writes
+ * `outline: none`; if you ever want to, replace the indicator in the same rule.
+ */
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
 }
 
 /* --------------------------------------------------------------- layout -- */
@@ -226,7 +330,9 @@ body {
     background-image: linear-gradient(96deg, var(--piece-i), var(--accent) 48%, var(--accent-2));
     -webkit-background-clip: text;
     background-clip: text;
-    color: transparent;
+    /* Transparent normally, so the gradient reads through the letters; a solid
+     * accent in high contrast, where a gradient cannot promise a ratio. */
+    color: var(--title-fill);
   }
 }
 
@@ -491,7 +597,7 @@ body {
   font-weight: 700;
   letter-spacing: 0.04em;
   padding: 0.4rem 1.1rem;
-  border: 1px solid var(--edge);
+  border: var(--control-border-width) solid var(--edge);
   border-radius: 999px;
   background: linear-gradient(180deg, var(--panel-hover), var(--panel));
   color: var(--fg);
@@ -530,12 +636,229 @@ body {
 
 /* A setting, not an action: present, legible, and not competing for attention. */
 .button--quiet {
-  border-color: var(--edge-soft);
+  /* A quiet button has no fill, so its border is the only thing that says
+   * "this is a control": it keeps the strong `--edge` and gets its quiet from
+   * weight and size instead of from a border nobody can see. */
   background: none;
   font-size: 0.7rem;
   font-weight: 600;
   padding: 0.4rem 0.75rem;
   color: var(--fg-muted);
+}
+
+/* ------------------------------------------------------------- dialogs -- */
+
+/*
+ * The pause menu and the help panel.
+ *
+ * Both are real modal dialogs — `ui/dialog.ts` moves focus in, keeps it in,
+ * closes on Escape and hands focus back — so all this has to do is look like
+ * one and stay usable at 320px. The panel scrolls on its own rather than the
+ * page (the page never scrolls), which is why it opts back into `pan-y` from
+ * the document-wide `touch-action: none`.
+ */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: var(--page-pad);
+  background: var(--overlay-veil);
+}
+
+.modal[hidden] {
+  display: none;
+}
+
+.modal__panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  width: min(26rem, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  padding: 1.05rem 1.1rem 1.15rem;
+  border: var(--control-border-width) solid var(--edge);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--panel-hover), var(--panel));
+  box-shadow:
+    0 1.5rem 3.5rem -1rem var(--cabinet-deep),
+    0 0 2.5rem -0.5rem var(--glow);
+  text-align: start;
+}
+
+.modal__panel--wide {
+  width: min(34rem, 100%);
+}
+
+.modal__title {
+  margin: 0;
+  /* Room for the close button, which is absolutely positioned over this row. */
+  padding-inline-end: 2.4rem;
+  font-family: var(--font-display);
+  font-size: clamp(1.05rem, 3.6vmin, 1.4rem);
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+}
+
+.modal__heading {
+  margin: 0 0 0.45rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.modal__actions,
+.settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.modal__section {
+  margin: 0;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--edge-soft);
+}
+
+.modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.modal__foot {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+}
+
+/* At least 44px on both axes, like every other target in the game. */
+.modal__close {
+  position: absolute;
+  top: 0.6rem;
+  inset-inline-end: 0.6rem;
+  display: grid;
+  place-items: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  padding: 0;
+  border: var(--control-border-width) solid var(--edge);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.modal__close:hover {
+  filter: brightness(1.3);
+}
+
+/* ---------------------------------------------------------- help panel -- */
+
+.help__lede {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--fg);
+  text-wrap: pretty;
+}
+
+.help__section {
+  margin: 0;
+}
+
+.help__heading {
+  margin: 0 0 0.4rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+/*
+ * Two columns that line up down the whole list. `display: contents` on the row
+ * is what lets a `<dt>`/`<dd>` pair land in one grid row without wrapping each
+ * pair in a box of its own — the semantics stay a description list and the
+ * layout is still a table.
+ */
+.help {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 0.2rem 0.65rem;
+}
+
+.help__row {
+  display: contents;
+}
+
+.help__keys {
+  justify-self: start;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--edge);
+  border-radius: 0.3rem;
+  background: var(--cabinet);
+  font-family: var(--font-numeric);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.help__term {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.help__detail {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  text-wrap: pretty;
+}
+
+/* ----------------------------------------------------------- countdown -- */
+
+/*
+ * Three, two, one over the well on the way back from a pause. `aria-hidden`,
+ * because the live region has already said "Paused" and will say "Resumed";
+ * counting out loud on top of that would be noise.
+ */
+.countdown {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius);
+  background: var(--overlay-veil);
+  font-family: var(--font-display);
+  font-size: clamp(3rem, 24vmin, 7rem);
+  font-weight: 800;
+  line-height: 1;
+  color: var(--accent);
+  text-shadow: 0 0 2rem var(--glow);
+  /* The well behind it is not interactive right now, and neither is this. */
+  pointer-events: none;
+}
+
+.countdown[hidden] {
+  display: none;
 }
 
 /* ------------------------------------------------------ the touch pad ---- */
@@ -573,7 +896,7 @@ body {
   min-height: var(--cap);
   min-width: var(--cap);
   padding: 0;
-  border: 1px solid var(--edge);
+  border: var(--control-border-width) solid var(--edge);
   border-radius: var(--radius-sm);
   background: linear-gradient(180deg, var(--panel-hover), var(--panel));
   color: var(--fg);
@@ -735,11 +1058,10 @@ body {
   }
 
   /*
-   * Five buttons — play, restart and the three settings — will not share a line
-   * at 320px, and pretending otherwise would mean labels nobody can read. They
-   * wrap into two rows instead, and the settings row is made as short as it can
-   * be while its targets stay tappable: every pixel here comes straight off the
-   * height of the well.
+   * Three buttons — play, restart, help — which do share a line at 320px. The
+   * four settings moved into the pause menu, where a player goes looking for
+   * them anyway; that bought the well back a row of chrome. `row-gap` still
+   * matters for the day a fourth action shows up and wraps.
    */
   .game__actions {
     row-gap: 0.3rem;
