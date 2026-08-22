@@ -1,44 +1,147 @@
 /*
- * Layout and chrome for the game shell.
+ * Mega Tetris — visual identity and layout.
  *
- * Deliberately plain: the visual identity is a later job. What this file does
- * commit to is structure — a centred well flanked by two rails that fold under
- * it on a narrow screen — plus the accessibility basics: visible focus rings,
- * generous contrast, and no motion for anyone who has asked for less of it.
+ * The idea: a tiny arcade cabinet that happens to live in a browser tab. A
+ * warm, deep-plum interior lit from above, a bezelled well with a soft violet
+ * glow, and seven cheerful block colours that stay readable against it.
+ *
+ * The `:root` block below is the *only* place a colour is written down. The
+ * canvas renderer reads the same custom properties back out through
+ * `ui/palette.ts`, so the blocks and the chrome cannot drift apart.
+ *
+ * Sizing is deliberately formula-driven rather than breakpoint-driven: the
+ * playfield is the smaller of "what the viewport height allows" and "what the
+ * viewport width allows once the rails are paid for", expressed as one `min()`.
+ * A single rem-based media query switches the rails from beside the well to
+ * above and below it; everything else follows from the formula.
  */
 
 :root {
   color-scheme: dark;
 
-  --bg: #0d0c20;
-  --surface: #171639;
-  --surface-raised: #221f52;
-  --well: #12112a;
-  --edge: #332f6b;
-  --fg: #f4f1ff;
-  --fg-muted: #b7b1e0;
-  --accent: #ffd166;
-  --accent-ink: #221a05;
+  /* ------------------------------------------------------- the cabinet -- */
 
-  --radius: 0.75rem;
-  --gap: 0.9rem;
+  /* Deep and slightly warm — an unlit cabinet interior, not a blue night. */
+  --cabinet: #1b1327;
+  --cabinet-deep: #120b1b;
+  --cabinet-lit: #2c1e40;
 
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  line-height: 1.5;
+  --panel: #241a33;
+  --panel-raised: #30234493;
+  --panel-hover: #3a2b50;
+  --panel-canvas: #1d1529;
+
+  --well: #1a1126;
+  --well-deep: #100a19;
+  --field-frame: #5a4478;
+  --field-bezel: #241a33;
+  --grid-line: #ffffff;
+  --veil: #0b0712;
+  --overlay-veil: rgb(11 7 18 / 0.74);
+
+  --edge: #43335c;
+  --edge-soft: #33254a;
+  --glow: rgb(148 92 226 / 0.45);
+
+  /* ------------------------------------------------------------- ink --- */
+
+  --fg: #fbf4ff;
+  --fg-muted: #b9a7d4;
+  --accent: #ffc857;
+  --accent-lit: #ffdb8a;
+  --accent-ink: #2a1c05;
+  --accent-2: #ff5d8f;
+
+  /* -------------------------------------------- the seven block faces --- */
+  /*
+   * Cheerful, and separated in value as well as in hue so the stack still
+   * reads without colour vision. `ui/palette.ts` derives each block's lit
+   * bevel and shaded edge from these, so one line here restyles a piece.
+   */
+
+  --piece-i: #3ddad7; /* turquoise */
+  --piece-o: #ffc857; /* marigold  */
+  --piece-t: #c77dff; /* orchid    */
+  --piece-s: #7ee081; /* mint      */
+  --piece-z: #ff5d73; /* coral     */
+  --piece-j: #5b8cff; /* cobalt    */
+  --piece-l: #ff9f1c; /* tangerine */
+
+  /* --------------------------------------------------------- geometry --- */
+
+  --radius: 0.85rem;
+  --radius-sm: 0.5rem;
+  --gap: clamp(0.4rem, 1.5vmin, 0.85rem);
+  --page-pad: clamp(0.45rem, 1.8vmin, 1.15rem);
+  --bezel: clamp(0.25rem, 0.8vmin, 0.5rem);
+  --rail: clamp(6.5rem, 15vw, 9.5rem);
+
+  /* The playfield is 22 rows: 20 in the well plus the 2-row spawn strip. */
+  --field-cols: 10;
+  --field-rows: 22;
+  --field-block-cap: 82dvh;
+  --field-inline-reserve: calc(2 * var(--rail) + 2 * var(--gap) + 2 * var(--page-pad));
+
+  /* ------------------------------------------------------------ type --- */
+
+  --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  --font-display: 'Avenir Next', 'Segoe UI', system-ui, sans-serif;
+  --font-numeric: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  font-family: var(--font-body);
+  line-height: 1.45;
+}
+
+/*
+ * More contrast on request: brighter faces, a stronger grid and a plain white
+ * ink. The canvas picks these up too — `watchPalette` re-reads the custom
+ * properties when the preference flips.
+ */
+@media (prefers-contrast: more) {
+  :root {
+    --fg: #ffffff;
+    --fg-muted: #e4d9f5;
+    --edge: #8f79b5;
+    --field-frame: #a68fcc;
+    --well: #100a19;
+    --well-deep: #07040c;
+
+    --piece-i: #5cf2ef;
+    --piece-o: #ffd979;
+    --piece-t: #d99cff;
+    --piece-s: #96f199;
+    --piece-z: #ff7f92;
+    --piece-j: #7ea5ff;
+    --piece-l: #ffb340;
+  }
 }
 
 * {
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
-  min-height: 100svh;
+  height: 100dvh;
+  /* The cabinet never scrolls: the field is sized to fit, not to overflow. */
+  overflow: hidden;
   display: grid;
   place-items: center;
-  padding: clamp(0.75rem, 2vw, 1.5rem);
-  background: var(--bg);
+  background:
+    radial-gradient(120% 85% at 50% -12%, var(--cabinet-lit) 0%, transparent 62%),
+    var(--cabinet-deep);
   color: var(--fg);
+  -webkit-text-size-adjust: 100%;
+}
+
+/* The mount point should not be a layout box of its own. */
+#app {
+  display: contents;
 }
 
 .visually-hidden {
@@ -55,59 +158,126 @@ body {
 
 /* --------------------------------------------------------------- layout -- */
 
+/*
+ * Grid, not flex, and deliberately: a grid track has a definite size, so the
+ * `max-height: 100%` that keeps the playfield inside the leftover space has
+ * something real to resolve against. The same trick is used again inside
+ * `.game__body` for the stacked layout.
+ */
 .game {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  justify-items: center;
   gap: var(--gap);
   width: 100%;
-  max-width: 60rem;
+  max-width: 64rem;
+  height: 100dvh;
+  padding: var(--page-pad);
 }
 
 .game__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
   text-align: center;
+}
+
+/* Cabinet marquee lights, one on each side of the title. */
+.game__header::before,
+.game__header::after {
+  content: '';
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0.6rem var(--accent);
+}
+
+.game__header::after {
+  background: var(--piece-i);
+  box-shadow: 0 0 0.6rem var(--piece-i);
 }
 
 .game__title {
   margin: 0;
-  font-size: clamp(1.5rem, 4vw, 2.25rem);
-  letter-spacing: -0.02em;
+  font-family: var(--font-display);
+  font-size: clamp(1.05rem, 3.2vmin, 1.9rem);
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
   color: var(--accent);
 }
 
-.game__body {
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  gap: var(--gap);
-  width: 100%;
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  .game__title {
+    background-image: linear-gradient(96deg, var(--piece-i), var(--accent) 48%, var(--accent-2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
 }
 
+.game__body {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  gap: var(--gap);
+}
+
+/*
+ * The rails run the full height of the well and pin a panel to each end of it,
+ * the way a cabinet mounts its readouts in the corners of the bezel.
+ */
 .rail {
   display: flex;
   flex-direction: column;
+  justify-content: space-between;
   gap: var(--gap);
-  flex: 0 0 9rem;
+  flex: 0 1 var(--rail);
   min-width: 0;
+  min-height: 0;
 }
 
 .game__actions {
+  flex: 0 0 auto;
   display: flex;
-  gap: 0.6rem;
+  gap: 0.5rem;
 }
 
 /* ----------------------------------------------------------- playfield -- */
 
 /*
- * 22 rows, not 20: the two extra are the spawn strip the renderer paints above
- * the well, so a new piece is visible the moment it appears.
+ * One sizing rule for the whole game. Whichever of these is smallest wins:
+ *   - the share of the viewport height the layout gives the field,
+ *   - a comfortable ceiling on a very large screen,
+ *   - the height implied by the width left over once the rails are paid for.
+ * `max-height: 100%` is the backstop: the body is a bounded flex line, so if
+ * the chrome above and below turns out taller than the estimate, the field
+ * gives way rather than pushing the page into a scroll.
  */
 .playfield {
   position: relative;
-  aspect-ratio: 10 / 22;
-  height: min(74svh, 40rem);
+  align-self: center;
+  aspect-ratio: var(--field-cols) / var(--field-rows);
+  height: min(
+    var(--field-block-cap),
+    44rem,
+    calc((100vw - var(--field-inline-reserve)) * var(--field-rows) / var(--field-cols))
+  );
+  max-height: 100%;
   max-width: 100%;
+  padding: var(--bezel);
   border-radius: var(--radius);
+  background: var(--field-bezel);
+  box-shadow:
+    inset 0 0 0 1px var(--edge),
+    0 0 0 1px var(--cabinet-deep),
+    0 1.5rem 3.5rem -1.5rem var(--glow),
+    0 0 2.5rem -0.75rem var(--glow);
 }
 
 .playfield:focus-visible {
@@ -119,6 +289,7 @@ body {
   display: block;
   width: 100%;
   height: 100%;
+  border-radius: calc(var(--radius) - var(--bezel));
 }
 
 .overlay {
@@ -128,8 +299,10 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
+  gap: 0.55rem;
   padding: 1rem;
+  border-radius: var(--radius);
+  background: var(--overlay-veil);
   text-align: center;
 }
 
@@ -139,14 +312,17 @@ body {
 
 .overlay__title {
   margin: 0;
-  font-size: clamp(1.4rem, 5vw, 2rem);
-  font-weight: 700;
+  font-family: var(--font-display);
+  font-size: clamp(1.15rem, 4.4vmin, 1.9rem);
+  font-weight: 800;
+  letter-spacing: 0.04em;
   color: var(--accent);
 }
 
 .overlay__hint {
   margin: 0;
-  max-width: 18rem;
+  max-width: 16rem;
+  font-size: clamp(0.72rem, 2.1vmin, 0.9rem);
   color: var(--fg);
   text-wrap: balance;
 }
@@ -154,17 +330,19 @@ body {
 /* --------------------------------------------------------------- panels -- */
 
 .panel {
-  background: var(--surface);
-  border: 1px solid var(--edge);
+  min-width: 0;
+  padding: 0.55rem 0.65rem 0.65rem;
+  border: 1px solid var(--edge-soft);
   border-radius: var(--radius);
-  padding: 0.7rem;
+  background: linear-gradient(180deg, var(--panel-raised), var(--panel));
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06);
 }
 
 .panel__title {
-  margin: 0 0 0.5rem;
-  font-size: 0.75rem;
+  margin: 0 0 0.4rem;
+  font-size: 0.65rem;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--fg-muted);
 }
@@ -172,23 +350,47 @@ body {
 .panel__canvas {
   display: block;
   width: 100%;
-  border-radius: 0.5rem;
-  background: var(--surface);
+  margin-inline: auto;
+  border-radius: var(--radius-sm);
+  background: var(--panel-canvas);
+  box-shadow: inset 0 0 0 1px var(--edge-soft);
 }
 
+/*
+ * Both previews cap their *height* and let the aspect ratio pull the width in
+ * with it, so a short viewport shrinks the thumbnails instead of stretching
+ * the rail past the bottom of the screen.
+ */
 .panel__canvas--next {
-  aspect-ratio: 1 / 2.2;
+  aspect-ratio: 1 / 2.15;
+  max-height: min(34dvh, 13rem);
 }
 
 .panel__canvas--hold {
-  aspect-ratio: 1 / 0.8;
+  aspect-ratio: 1 / 0.85;
+  max-height: min(14dvh, 5rem);
+}
+
+/* ------------------------------------------------------------- readouts -- */
+
+.score {
+  margin: 0;
+  font-family: var(--font-numeric);
+  font-size: clamp(1.3rem, 3.4vmin, 1.9rem);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
 }
 
 .stats {
-  margin: 0;
+  margin: 0.5rem 0 0;
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.2rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--edge-soft);
 }
 
 .stats__row {
@@ -199,35 +401,45 @@ body {
 }
 
 .stats__label {
-  font-size: 0.8rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--fg-muted);
 }
 
 .stats__value {
   margin: 0;
+  font-family: var(--font-numeric);
   font-variant-numeric: tabular-nums;
-  font-size: 1.1rem;
+  font-size: 0.95rem;
   font-weight: 700;
   color: var(--fg);
 }
 
+/* Keys read as little keycaps, which wrap into a strip on a narrow screen. */
 .controls {
   margin: 0;
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  font-size: 0.75rem;
 }
 
 .controls__row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.4rem;
+  font-size: 0.65rem;
 }
 
 .controls__keys {
-  font-weight: 700;
+  padding: 0.05rem 0.3rem;
+  border: 1px solid var(--edge);
+  border-radius: 0.3rem;
+  background: var(--cabinet);
+  font-family: var(--font-numeric);
+  font-size: 0.62rem;
+  font-weight: 600;
   color: var(--accent);
   white-space: nowrap;
 }
@@ -242,22 +454,28 @@ body {
 
 .button {
   font: inherit;
-  font-weight: 600;
-  padding: 0.5rem 1.1rem;
-  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0.4rem 1.1rem;
   border: 1px solid var(--edge);
-  background: var(--surface-raised);
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--panel-hover), var(--panel));
   color: var(--fg);
   cursor: pointer;
-  transition: transform 120ms ease, background-color 120ms ease;
+  transition:
+    transform 120ms ease,
+    filter 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .button:hover {
-  background: #2c2a66;
+  filter: brightness(1.18);
 }
 
 .button:active {
   transform: translateY(1px);
+  filter: brightness(0.95);
 }
 
 .button:focus-visible {
@@ -266,20 +484,30 @@ body {
 }
 
 .button--primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  border-color: var(--accent-lit);
+  background: linear-gradient(180deg, var(--accent-lit), var(--accent));
   color: var(--accent-ink);
+  box-shadow: 0 0.5rem 1.5rem -0.75rem var(--accent);
 }
 
-.button--primary:hover {
-  background: #ffdd8c;
-}
+/* ----------------------------------------------------------- responsive -- */
 
-/* ------------------------------------------------------------ responsive -- */
+/*
+ * Narrow: the rails unfold above and below the well. The field keeps the same
+ * `min()` rule — only the two inputs to it change, because the rails no longer
+ * cost horizontal space and the chrome now costs vertical space instead.
+ */
+@media (max-width: 48rem) {
+  :root {
+    --field-block-cap: 72dvh;
+    --field-inline-reserve: calc(2 * var(--page-pad));
+  }
 
-@media (max-width: 46rem) {
+  /* Rail, well, rail — the middle track takes whatever the rails leave. */
   .game__body {
-    flex-direction: column;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    justify-items: center;
     align-items: center;
   }
 
@@ -287,23 +515,119 @@ body {
     flex: 0 0 auto;
     flex-direction: row;
     flex-wrap: wrap;
+    align-items: stretch;
     justify-content: center;
     width: 100%;
   }
 
   .rail .panel {
-    flex: 1 1 8rem;
-    max-width: 12rem;
+    flex: 1 1 7rem;
+    max-width: 13rem;
+  }
+
+  /*
+   * The keyboard help stops being a panel and becomes a strip of keycaps under
+   * the well: the same information, about a third of the height. Its heading
+   * is only hidden visually — a screen reader still hears the section. Written
+   * at rail-panel specificity so it wins the two shorthands above.
+   */
+  .rail .panel--controls {
+    flex: 1 1 100%;
+    max-width: none;
+    padding: 0.1rem 0.2rem;
+    border-color: transparent;
+    background: none;
+    box-shadow: none;
+  }
+
+  .panel--controls .panel__title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .controls {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.15rem 0.4rem;
+  }
+
+  .controls__row {
+    gap: 0.2rem;
+    font-size: 0.58rem;
+  }
+
+  .controls__keys {
+    padding: 0 0.22rem;
+    font-size: 0.56rem;
+  }
+
+  .controls__label {
+    text-align: left;
+  }
+
+  /* Every panel tightens up: on a phone the well is what deserves the pixels. */
+  .panel {
+    padding: 0.4rem 0.5rem 0.45rem;
+  }
+
+  .panel__title {
+    margin-bottom: 0.25rem;
+    font-size: 0.6rem;
+  }
+
+  .score {
+    font-size: clamp(1.05rem, 5vw, 1.45rem);
+  }
+
+  /* Level and lines sit side by side rather than stacking. */
+  .stats {
+    margin-top: 0.3rem;
+    padding-top: 0.3rem;
+    flex-direction: row;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .stats__row {
+    gap: 0.3rem;
+  }
+
+  /* Both previews lie down and shrink: horizontal strips, not tall columns. */
+  .panel__canvas--next {
+    aspect-ratio: 2.15 / 1;
+    max-height: min(8dvh, 2.8rem);
+  }
+
+  .panel__canvas--hold {
+    aspect-ratio: 1.35 / 1;
+    max-height: min(8dvh, 2.8rem);
+  }
+}
+
+/*
+ * Short and wide — a phone on its side, or a laptop with the window squashed.
+ * The keyboard help is the one thing worth losing: it is the least useful
+ * panel on a touch device and the tallest one in the rail.
+ */
+@media (max-height: 34rem) {
+  .game__header::before,
+  .game__header::after {
+    display: none;
   }
 
   .panel--controls {
-    flex-basis: 100%;
-    max-width: none;
+    display: none;
   }
 
-  .playfield {
-    height: min(66svh, 32rem);
-    order: -1;
+  .stats {
+    margin-top: 0.35rem;
+    padding-top: 0.3rem;
   }
 }
 

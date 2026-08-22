@@ -61,19 +61,11 @@ export function createShell(root: HTMLElement): Shell {
       </header>
 
       <div class="game__body">
-        <aside class="rail">
-          <section class="panel">
-            <h2 class="panel__title">Hold</h2>
-            <canvas class="panel__canvas panel__canvas--hold" data-hold></canvas>
-          </section>
-
-          <section class="panel">
+        <aside class="rail rail--start">
+          <section class="panel panel--score">
             <h2 class="panel__title">Score</h2>
+            <p class="score" data-score>0</p>
             <dl class="stats">
-              <div class="stats__row">
-                <dt class="stats__label">Score</dt>
-                <dd class="stats__value" data-score>0</dd>
-              </div>
               <div class="stats__row">
                 <dt class="stats__label">Level</dt>
                 <dd class="stats__value" data-level>1</dd>
@@ -83,6 +75,11 @@ export function createShell(root: HTMLElement): Shell {
                 <dd class="stats__value" data-lines>0</dd>
               </div>
             </dl>
+          </section>
+
+          <section class="panel panel--hold">
+            <h2 class="panel__title">Hold</h2>
+            <canvas class="panel__canvas panel__canvas--hold" data-hold></canvas>
           </section>
         </aside>
 
@@ -95,8 +92,8 @@ export function createShell(root: HTMLElement): Shell {
           </div>
         </div>
 
-        <aside class="rail">
-          <section class="panel">
+        <aside class="rail rail--end">
+          <section class="panel panel--next">
             <h2 class="panel__title">Next</h2>
             <canvas class="panel__canvas panel__canvas--next" data-next></canvas>
           </section>
@@ -109,7 +106,7 @@ export function createShell(root: HTMLElement): Shell {
       </div>
 
       <div class="game__actions">
-        <button type="button" class="button" data-play>Play</button>
+        <button type="button" class="button button--primary" data-play>Play</button>
         <button type="button" class="button" data-restart>Restart</button>
       </div>
 

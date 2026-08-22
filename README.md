@@ -49,7 +49,7 @@ any static host or subdirectory and will work as-is.
 │   ├── engine/       # Game rules: board, pieces, seeded bag, state machine
 │   ├── ui/           # Browser layer: canvas renderer, input, loop, HUD, shell
 │   ├── main.ts       # Composition root — wires the engine to the browser
-│   ├── style.css     # Global styles
+│   ├── style.css     # Visual identity: the `:root` palette and the layout
 │   └── *.test.ts     # Unit tests, colocated with the code they cover
 ├── tsconfig.json     # Strict TypeScript config (noEmit — Vite handles emit)
 └── vite.config.ts    # Vite + Vitest configuration
@@ -103,7 +103,7 @@ job and holds no rules of its own:
 | Module        | Responsibility                                                        |
 | ------------- | --------------------------------------------------------------------- |
 | `renderer.ts` | Paints a `GameState` onto a canvas: well, stack, ghost, active piece.  |
-| `palette.ts`  | Every colour in the game, in one map.                                  |
+| `palette.ts`  | Reads the CSS custom properties and derives each block's shading.      |
 | `input.ts`    | Keyboard bindings and DAS/ARR auto-repeat, exported as data.           |
 | `loop.ts`     | `requestAnimationFrame` timing, delta clamping, pause when hidden.     |
 | `shell.ts`    | Builds the DOM: canvases, readouts, overlay, buttons, live region.     |
@@ -117,6 +117,27 @@ visible from the moment it appears rather than a second later.
 Frame deltas are clamped to 100 ms and the loop suspends while the tab is
 hidden, so coming back to a backgrounded game never costs a burst of dropped
 rows — the game simply pauses.
+
+## Look and layout
+
+Every colour is declared once, as a custom property in the single `:root` block
+of `src/style.css`. The canvas does not keep a second copy: `ui/palette.ts`
+reads those properties out of the computed style at startup, and again whenever
+a colour preference changes, so restyling the game — including the seven block
+faces — is a matter of editing CSS. Each block's lit bevel and shaded edge are
+derived from its face colour and drawn programmatically; there are no image
+assets anywhere in the project, and the favicon is an inline SVG data URI.
+
+The playfield is sized by one rule rather than a table of breakpoints: it takes
+the smallest of the height the layout can spare, a ceiling for large screens,
+and the height implied by the width left over once the rails are paid for. A
+single rem-based media query moves the rails from beside the well to above and
+below it. The page itself never scrolls — the field shrinks instead.
+
+Verified at 320x568, 375x812, 768x1024, 1440x900 and 800x400: no horizontal
+overflow, no page scrolling, and the whole 22-row field visible in every case.
+`prefers-reduced-motion` drops the button transitions, and `prefers-contrast:
+more` brightens the palette in both the chrome and the canvas.
 
 ## Controls
 

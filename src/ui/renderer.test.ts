@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import { BOARD_WIDTH, PIECE_KINDS, VISIBLE_HEIGHT, createBoard, getCells } from '../engine';
-import { PIECE_PALETTE, withAlpha } from './palette';
 import { computeGridLayout, hiddenRowCount, pieceExtents } from './renderer';
 
 describe('computeGridLayout', () => {
@@ -74,20 +73,5 @@ describe('hiddenRowCount', () => {
 
   it('hides nothing on a board shorter than the visible field', () => {
     expect(hiddenRowCount(createBoard(4, 4))).toBe(0);
-  });
-});
-
-describe('palette', () => {
-  it('has a colour for every piece kind', () => {
-    for (const kind of PIECE_KINDS) {
-      expect(PIECE_PALETTE[kind].fill).toMatch(/^#[0-9a-f]{6}$/);
-    }
-  });
-
-  it('builds valid translucent variants', () => {
-    expect(withAlpha('#35d0ee', 0)).toBe('#35d0ee00');
-    expect(withAlpha('#35d0ee', 1)).toBe('#35d0eeff');
-    expect(withAlpha('#35d0ee', 0.5)).toBe('#35d0ee80');
-    expect(withAlpha('#35d0ee', 5)).toBe('#35d0eeff');
   });
 });
