@@ -406,6 +406,17 @@ body {
   color: var(--accent);
 }
 
+/*
+ * Lit while the count-up is still climbing. A colour and a glow, not a
+ * transform — the movement is the number itself, and the readout should not be
+ * jumping around underneath it. Nothing here animates, so reduced motion has
+ * nothing to switch off: the counter simply arrives instantly instead.
+ */
+.score--counting {
+  color: var(--accent-lit);
+  text-shadow: 0 0 0.75rem var(--glow);
+}
+
 .stats {
   margin: 0.5rem 0 0;
   display: flex;
@@ -723,15 +734,24 @@ body {
     font-size: 0.85rem;
   }
 
-  /* Three buttons on one line at 320px only if they stop asking for room they
-   * do not need; `flex-wrap` on the row is the guarantee, this is the fit. */
+  /*
+   * Five buttons — play, restart and the three settings — will not share a line
+   * at 320px, and pretending otherwise would mean labels nobody can read. They
+   * wrap into two rows instead, and the settings row is made as short as it can
+   * be while its targets stay tappable: every pixel here comes straight off the
+   * height of the well.
+   */
+  .game__actions {
+    row-gap: 0.3rem;
+  }
+
   .button {
     padding: 0.4rem 0.8rem;
   }
 
   .button--quiet {
-    padding: 0.4rem 0.55rem;
-    font-size: 0.62rem;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.58rem;
   }
 
   :root[data-touch-pad='on'] {
@@ -899,14 +919,67 @@ body {
   }
 }
 
+/* ------------------------------------------------------------- motion --- */
+
+/*
+ * The game-over panel waits for the field to finish greying out underneath it,
+ * then arrives. `backwards` is what keeps it invisible during the delay rather
+ * than sitting there fully drawn and then flickering.
+ *
+ * The delay is tuned against the canvas sweep in `ui/effects.ts`: 22 rows at
+ * roughly 24ms each. If one moves, move the other.
+ */
+@keyframes overlay-rise {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.overlay[data-state='over'] {
+  animation: overlay-rise 320ms ease-out 440ms backwards;
+}
+
+/*
+ * Two sources, one answer.
+ *
+ * `prefers-reduced-motion` is what applies before the script has had its say,
+ * and it is scoped so that a player who has explicitly asked this game for full
+ * effects gets them. `data-motion` is `main.ts`'s decision — the system
+ * preference and the in-game toggle folded together — and it is authoritative
+ * once set. The canvas effects follow exactly the same rule through
+ * `ui/motion.ts`; this block is only the DOM half of it.
+ */
 @media (prefers-reduced-motion: reduce) {
-  .button,
-  .pad__button {
+  :root:not([data-motion='full']) .button,
+  :root:not([data-motion='full']) .pad__button {
     transition: none;
   }
 
-  .button:active,
-  .pad__button:active {
+  :root:not([data-motion='full']) .button:active,
+  :root:not([data-motion='full']) .pad__button:active {
     transform: none;
   }
+
+  :root:not([data-motion='full']) .overlay[data-state='over'] {
+    animation: none;
+  }
+}
+
+:root[data-motion='reduced'] .button,
+:root[data-motion='reduced'] .pad__button {
+  transition: none;
+}
+
+:root[data-motion='reduced'] .button:active,
+:root[data-motion='reduced'] .pad__button:active {
+  transform: none;
+}
+
+:root[data-motion='reduced'] .overlay[data-state='over'] {
+  animation: none;
 }

@@ -297,12 +297,58 @@ export interface Renderer<T> {
 }
 
 /**
+ * Where the field ended up this frame, in device pixels.
+ *
+ * Handed to the `decorate` hook so the effects layer can place a particle or a
+ * score label on a board coordinate without recomputing the layout — and,
+ * more importantly, without a second copy of the sizing rules.
+ */
+export interface FieldView {
+  readonly layout: GridLayout;
+  /** Buffer rows above the well; board row `hiddenRows` is the field's top row. */
+  readonly hiddenRows: number;
+  /** Top edge and height of the well proper, buffer rows excluded. */
+  readonly wellY: number;
+  readonly wellHeight: number;
+  /** Backing-store size of the canvas. */
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * The three places the delight layer is allowed to reach into a paint.
+ *
+ * Deliberately narrow. The renderer still owns every decision about how the
+ * game itself is drawn; these let something else nudge the whole field, dent
+ * individual blocks, and paint on top — nothing more.
+ */
+export interface BoardRendererOptions {
+  /**
+   * Displacement for the whole field, in device pixels, given the current cell
+   * size. Return `null` for no shake. Called once per paint, before anything is
+   * drawn, so the result may be a reused object.
+   */
+  readonly shake?: (cell: number) => Readonly<{ x: number; y: number }> | null;
+  /**
+   * How far the locked block at `(x, y)` is squashed toward the floor of its
+   * cell, 0..1. Called for every filled cell, so it must be cheap and must
+   * return 0 fast when nothing is squashing.
+   */
+  readonly cellSquash?: (x: number, y: number) => number;
+  /** Painted last, over the veil and the frame. */
+  readonly decorate?: (ctx: CanvasRenderingContext2D, view: FieldView) => void;
+}
+
+/**
  * The playfield: well, grid, locked stack, ghost and active piece.
  *
  * Only the visible rows are drawn — the buffer rows above the field are where
  * pieces spawn, and showing them would make the well look two rows too tall.
  */
-export function createBoardRenderer(canvas: HTMLCanvasElement): Renderer<GameState> {
+export function createBoardRenderer(
+  canvas: HTMLCanvasElement,
+  options: BoardRendererOptions = {},
+): Renderer<GameState> {
   let last: GameState | null = null;
 
   const surface = new CanvasSurface(canvas, () => {
@@ -326,6 +372,15 @@ export function createBoardRenderer(canvas: HTMLCanvasElement): Renderer<GameSta
     const wellHeight = layout.height - hidden * layout.cell;
 
     ctx.clearRect(0, 0, width, height);
+
+    // The shake wraps the entire paint, effects included, so the field moves as
+    // one object rather than sliding apart. Cleared first, above, so the pixels
+    // it uncovers at the edge are the bezel behind the canvas.
+    const nudge = options.shake?.(layout.cell) ?? null;
+    ctx.save();
+    if (nudge !== null) {
+      ctx.translate(nudge.x, nudge.y);
+    }
 
     // The well deepens toward the floor, so the stack has something to sit on.
     const wellFill = ctx.createLinearGradient(0, wellY, 0, wellY + wellHeight);
@@ -358,13 +413,22 @@ export function createBoardRenderer(canvas: HTMLCanvasElement): Renderer<GameSta
           continue;
         }
         ctx.globalAlpha = y < hidden ? SPAWN_STRIP_ALPHA : 1;
-        drawBlock(
-          ctx,
-          layout.x + x * layout.cell,
-          layout.y + y * layout.cell,
-          layout.cell,
-          pieces[cell],
-        );
+        const blockX = layout.x + x * layout.cell;
+        const blockY = layout.y + y * layout.cell;
+        // A squashed block is scaled about the floor of its own cell, so it
+        // flattens onto the stack instead of drifting off it.
+        const squash = options.cellSquash?.(x, y) ?? 0;
+        if (squash > 0) {
+          const floor = blockY + layout.cell;
+          ctx.save();
+          ctx.translate(0, floor);
+          ctx.scale(1, 1 - squash);
+          ctx.translate(0, -floor);
+        }
+        drawBlock(ctx, blockX, blockY, layout.cell, pieces[cell]);
+        if (squash > 0) {
+          ctx.restore();
+        }
       }
     }
     ctx.globalAlpha = 1;
@@ -397,6 +461,10 @@ export function createBoardRenderer(canvas: HTMLCanvasElement): Renderer<GameSta
       layout.width - frameWidth,
       wellHeight - frameWidth,
     );
+
+    options.decorate?.(ctx, { layout, hiddenRows: hidden, wellY, wellHeight, width, height });
+
+    ctx.restore();
   }
 
   return {

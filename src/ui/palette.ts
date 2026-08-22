@@ -41,6 +41,10 @@ export interface SurfaceColors {
   readonly panel: string;
   /** Drawn over the whole well while the run is not `playing`. */
   readonly veil: string;
+  /** The cabinet's highlight colour — score popups and the level banner. */
+  readonly accent: string;
+  /** Body ink. Also the white a line clear flashes toward. */
+  readonly ink: string;
 }
 
 export interface Palette {
@@ -67,6 +71,8 @@ export const SURFACE_PROPERTY: Readonly<Record<keyof SurfaceColors, string>> = {
   frame: '--field-frame',
   panel: '--panel-canvas',
   veil: '--veil',
+  accent: '--accent',
+  ink: '--fg',
 };
 
 /** Mirrors the `--piece-*` properties in `style.css`. */
@@ -88,6 +94,8 @@ export const DEFAULT_SURFACE_HEX: Readonly<Record<keyof SurfaceColors, string>> 
   frame: '#5a4478',
   panel: '#1d1529',
   veil: '#0b0712',
+  accent: '#ffc857',
+  ink: '#fbf4ff',
 };
 
 /** What a bevel is mixed toward: daylight above, cabinet shadow below. */
