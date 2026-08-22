@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { defaultStats, type RunSummary } from './stats';
 import {
   LEGACY_KEYS,
+  detectStorageArea,
   SCHEMA_VERSION,
   STORAGE_KEY,
   createStore,
@@ -343,5 +344,58 @@ describe('sanitizeSettings', () => {
     const settings = { ...defaultSettings(), sound: false, pad: 'off' as const, startLevel: 9 };
 
     expect(sanitizeSettings(JSON.parse(JSON.stringify(settings)))).toEqual(settings);
+  });
+});
+
+describe('detectStorageArea', () => {
+  it('returns null when the environment has no localStorage at all', () => {
+    // Vitest runs this suite in `node`, which is the honest version of the
+    // browser cases it stands in for: storage switched off by policy, and a
+    // third-party context where merely *reading* `window.localStorage` throws.
+    expect(detectStorageArea()).toBeNull();
+  });
+
+  it('is what `createStore` falls back on, and it says so', () => {
+    const store = createStore();
+    expect(store.persistent()).toBe(false);
+    // Still a working store — the player just gets no memory between visits.
+    store.set('sound', false);
+    expect(store.get('sound')).toBe(false);
+    expect(store.stats()).toEqual(defaultStats());
+  });
+});
+
+describe('writing', () => {
+  it('does not touch storage when the value has not changed', () => {
+    const area = memoryArea();
+    const store = createStore({ area });
+    store.set('startLevel', 4);
+    const written = area.map.get(STORAGE_KEY);
+    area.map.set(STORAGE_KEY, 'sentinel');
+
+    store.set('startLevel', 4);
+
+    expect(area.map.get(STORAGE_KEY)).toBe('sentinel');
+    expect(written).toBeDefined();
+  });
+
+  it('writes again as soon as the value really changes', () => {
+    const area = memoryArea();
+    const store = createStore({ area });
+    store.set('startLevel', 4);
+    area.map.set(STORAGE_KEY, 'sentinel');
+
+    store.set('startLevel', 5);
+
+    expect(area.map.get(STORAGE_KEY)).not.toBe('sentinel');
+    expect(createStore({ area }).get('startLevel')).toBe(5);
+  });
+
+  it('survives a storage that refuses every write', () => {
+    const store = createStore({ area: readOnlyArea() });
+    expect(store.persistent()).toBe(false);
+    expect(() => store.set('sound', false)).not.toThrow();
+    // The in-memory copy is still authoritative for this session.
+    expect(store.get('sound')).toBe(false);
   });
 });

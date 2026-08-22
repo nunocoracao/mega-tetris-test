@@ -3,16 +3,21 @@ import { describe, expect, it } from 'vitest';
 import {
   boardFromStrings,
   boardToStrings,
+  createBoard,
   isBoardEmpty,
+  pieceCells,
   BOARD_HEIGHT,
   BOARD_WIDTH,
+  BUFFER_ROWS,
   type Board,
 } from './board';
 import {
   applyInput,
   createGame,
   dropDistance,
+  ghostPiece,
   gravityIntervalMs,
+  isResting,
   levelForLines,
   update,
   GRAVITY_BASE_MS,
@@ -29,7 +34,7 @@ import {
   type GameInput,
   type GameState,
 } from './game';
-import type { PieceKind } from './types';
+import type { ActivePiece, PieceKind } from './types';
 
 /** Start a game: `createGame` hands back a `ready` state, `resume` runs it. */
 function start(state: GameState): GameState {
@@ -716,5 +721,325 @@ describe('determinism', () => {
     const played = replay(2026);
     expect(played.score).toBeGreaterThan(0);
     expect(isBoardEmpty(played.board)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The ghost, and the edges a playtest actually finds
+// ---------------------------------------------------------------------------
+
+describe('ghostPiece', () => {
+  it('is null when there is no piece on the field', () => {
+    const between = { ...playing(), active: null };
+    expect(ghostPiece(between)).toBeNull();
+    expect(ghostPiece(applyInput(playing(), { type: 'pause' }))).not.toBeNull();
+  });
+
+  it('sits flush on the floor of an empty board', () => {
+    const state = playing();
+    const ghost = ghostPiece(state);
+    expect(ghost).not.toBeNull();
+    const lowest = Math.max(...pieceCells(ghost as ActivePiece).map((cell) => cell.y));
+    expect(lowest).toBe(BOARD_HEIGHT - 1);
+  });
+
+  it('keeps the active piece’s kind and rotation, and only moves it down', () => {
+    const state = applyInput(playing(), { type: 'rotateCW' });
+    const active = state.active as ActivePiece;
+    const ghost = ghostPiece(state) as ActivePiece;
+    expect(ghost.kind).toBe(active.kind);
+    expect(ghost.rotation).toBe(active.rotation);
+    expect(ghost.x).toBe(active.x);
+    expect(ghost.y).toBeGreaterThanOrEqual(active.y);
+  });
+
+  it('rests on the stack rather than passing through it', () => {
+    const state = pendingClear(2);
+    // The I is already resting in the gap, so its ghost is exactly where it is.
+    expect(ghostPiece(state)).toEqual(state.active);
+  });
+
+  it('is where a hard drop would put the piece', () => {
+    const state = playing();
+    const ghost = ghostPiece(state) as ActivePiece;
+    const dropped = applyInput(state, { type: 'hardDrop' });
+    // The piece locks on impact, so the proof is in the cells it left behind.
+    const locked = eventsOfType(dropped, 'lock')[0];
+    expect(locked?.cells).toEqual(pieceCells(ghost));
+  });
+
+  it('agrees with `dropDistance` and `isResting`', () => {
+    const state = playing();
+    const active = state.active as ActivePiece;
+    const ghost = ghostPiece(state) as ActivePiece;
+    expect(ghost.y - active.y).toBe(dropDistance(state.board, active));
+    expect(isResting(state.board, ghost)).toBe(true);
+    expect(isResting(state.board, active)).toBe(false);
+  });
+});
+
+describe('rotation the board refuses', () => {
+  /**
+   * A one-cell-wide well running the whole height of the field, with an `I`
+   * standing in it. A horizontal `I` needs four columns and there is exactly
+   * one, so no kick in the table can place it — which is the case a shallow
+   * well does *not* test: there, a kick simply lifts the piece out of the hole.
+   */
+  function inATightWell(): GameState {
+    const wall = Array.from({ length: BOARD_WIDTH }, (_, x) => (x === GAP_COLUMN ? '.' : 'J')).join('');
+    const empty = '.'.repeat(BOARD_WIDTH);
+    const board = boardFromStrings(
+      Array.from({ length: BOARD_HEIGHT }, (_, y) => (y >= BUFFER_ROWS ? wall : empty)),
+    );
+    return {
+      ...playing(),
+      board,
+      active: { kind: 'I', rotation: 1, x: GAP_COLUMN - 2, y: BOARD_HEIGHT - 4 },
+    };
+  }
+
+  it('leaves the piece exactly where it was', () => {
+    const state = inATightWell();
+    const turned = applyInput(state, { type: 'rotateCW' });
+    expect(turned.active).toEqual(state.active);
+    expect(applyInput(state, { type: 'rotateCCW' }).active).toEqual(state.active);
+  });
+
+  it('does not spend a lock reset on a rotation that never happened', () => {
+    const state = inATightWell();
+    let current = state;
+    for (let i = 0; i < 30; i += 1) {
+      current = applyInput(current, { type: 'rotateCW' });
+    }
+    expect(current.lockResets).toBe(0);
+    expect(current.active).toEqual(state.active);
+  });
+
+  it('still locks on time however hard the player spins', () => {
+    let current = inATightWell();
+    for (let i = 0; i < 20; i += 1) {
+      current = applyInput(current, { type: 'rotateCW' });
+      current = update(current, 10);
+    }
+    // 200ms of the 500ms delay has gone and no reset was earned, so the piece
+    // is still on the field but on its way down.
+    expect(current.active).not.toBeNull();
+    expect(update(current, LOCK_DELAY_MS).events.some((e) => e.type === 'lock')).toBe(true);
+  });
+});
+
+describe('holding a direction into a wall', () => {
+  it('never walks the piece off the left edge, however long it is held', () => {
+    let current = playing();
+    for (let i = 0; i < 200; i += 1) {
+      current = applyInput(current, { type: 'moveLeft' });
+    }
+    const cells = pieceCells(current.active as ActivePiece);
+    expect(Math.min(...cells.map((cell) => cell.x))).toBe(0);
+    expect(current.score).toBe(0);
+  });
+
+  it('never walks it off the right edge either', () => {
+    let current = playing();
+    for (let i = 0; i < 200; i += 1) {
+      current = applyInput(current, { type: 'moveRight' });
+    }
+    const cells = pieceCells(current.active as ActivePiece);
+    expect(Math.max(...cells.map((cell) => cell.x))).toBe(BOARD_WIDTH - 1);
+    expect(current.score).toBe(0);
+  });
+
+  it('emits nothing at all for the refused moves', () => {
+    let current = playing();
+    for (let i = 0; i < 20; i += 1) {
+      current = applyInput(current, { type: 'moveLeft' });
+      expect(current.events).toEqual([]);
+    }
+  });
+});
+
+describe('hold, hammered', () => {
+  it('swaps once and then ignores every further press', () => {
+    const state = playing();
+    let current = applyInput(state, { type: 'hold' });
+    const afterFirst = current;
+    for (let i = 0; i < 40; i += 1) {
+      current = applyInput(current, { type: 'hold' });
+    }
+    expect(current.hold).toBe(afterFirst.hold);
+    expect(current.active).toEqual(afterFirst.active);
+    expect(current.next).toEqual(afterFirst.next);
+    expect(current.bag).toEqual(afterFirst.bag);
+    expect(current.score).toBe(0);
+  });
+
+  it('keeps the preview queue exactly full through repeated swaps', () => {
+    let current = playing();
+    for (let i = 0; i < 12; i += 1) {
+      current = applyInput(current, { type: 'hold' });
+      current = applyInput(current, { type: 'hardDrop' });
+      current = update(current, LINE_CLEAR_DELAY_MS + 1);
+      expect(current.next).toHaveLength(NEXT_QUEUE_SIZE);
+    }
+  });
+});
+
+describe('input during the line-clear pause', () => {
+  /** A state that has just cleared a row and is waiting to spawn. */
+  function pausing(): GameState {
+    const cleared = applyInput(pendingClear(1), { type: 'hardDrop' });
+    expect(cleared.active).toBeNull();
+    expect(cleared.clearDelayMs).toBe(LINE_CLEAR_DELAY_MS);
+    return cleared;
+  }
+
+  const GAMEPLAY: readonly GameInput[] = [
+    { type: 'moveLeft' },
+    { type: 'moveRight' },
+    { type: 'softDrop' },
+    { type: 'hardDrop' },
+    { type: 'rotateCW' },
+    { type: 'rotateCCW' },
+    { type: 'hold' },
+  ];
+
+  it.each(GAMEPLAY.map((input) => [input.type, input] as const))(
+    'ignores %s while the board is settling',
+    (_type, input) => {
+      const paused = pausing();
+      const after = applyInput(paused, input);
+      expect(after.active).toBeNull();
+      expect(after.score).toBe(paused.score);
+      expect(after.board).toEqual(paused.board);
+      expect(after.events).toEqual([]);
+    },
+  );
+
+  it('still spawns on time after a storm of ignored input', () => {
+    let current = pausing();
+    for (let i = 0; i < 100; i += 1) {
+      current = applyInput(current, GAMEPLAY[i % GAMEPLAY.length] as GameInput);
+    }
+    expect(current.clearDelayMs).toBe(LINE_CLEAR_DELAY_MS);
+    const spawned = update(current, LINE_CLEAR_DELAY_MS);
+    expect(spawned.active).not.toBeNull();
+    expect(eventsOfType(spawned, 'spawn')).toHaveLength(1);
+  });
+
+  it('lets pause and restart through, because they are not gameplay', () => {
+    const paused = applyInput(pausing(), { type: 'pause' });
+    expect(paused.status).toBe('paused');
+    const restarted = applyInput(pausing(), { type: 'restart' });
+    expect(restarted.status).toBe('playing');
+    expect(restarted.active).not.toBeNull();
+    expect(restarted.score).toBe(0);
+  });
+});
+
+describe('a head start', () => {
+  it('starts on the chosen level and counts up from there', () => {
+    expect(levelForLines(7, 0)).toBe(7);
+    expect(levelForLines(7, 9)).toBe(7);
+    expect(levelForLines(7, 10)).toBe(8);
+    expect(levelForLines(10, 95)).toBe(19);
+  });
+
+  it('scores the first clear at the head-start level, not at level 1', () => {
+    const state = applyInput(pendingClear(1, { startLevel: 7 }), { type: 'hardDrop' });
+    const cleared = eventsOfType(state, 'rowsCleared')[0];
+    expect(cleared?.points).toBe((LINE_CLEAR_POINTS[1] ?? 0) * 7);
+  });
+
+  it('levels up from the head start after ten lines, and says so', () => {
+    const state = applyInput(pendingClear(1, { startLevel: 7, lines: 9 }), { type: 'hardDrop' });
+    expect(state.level).toBe(8);
+    expect(eventsOfType(state, 'levelUp')[0]).toEqual({ type: 'levelUp', level: 8, previousLevel: 7 });
+  });
+
+  it('runs at the head start’s gravity from the very first piece', () => {
+    expect(playing({ startLevel: 9 }).level).toBe(9);
+    expect(gravityIntervalMs(9)).toBeLessThan(gravityIntervalMs(1));
+  });
+
+  it('clamps a nonsense start level to a playable one', () => {
+    expect(createGame({ startLevel: 0 }).level).toBe(1);
+    expect(createGame({ startLevel: -4 }).level).toBe(1);
+    expect(createGame({ startLevel: 3.9 }).level).toBe(3);
+  });
+});
+
+describe('fast gravity', () => {
+  it('never falls more than one row per interval, however small the interval', () => {
+    // Level 18 and up sits on the floor of the curve. A frame that spans three
+    // intervals must move three rows, not skip to the bottom.
+    let current = { ...playing({ startLevel: 18 }), board: createBoard() };
+    const startY = (current.active as ActivePiece).y;
+    current = update(current, GRAVITY_FLOOR_MS * 3);
+    expect((current.active as ActivePiece).y).toBe(startY + 3);
+  });
+
+  it('behaves the same at level 60 as at the floor level', () => {
+    expect(gravityIntervalMs(60)).toBe(GRAVITY_FLOOR_MS);
+    const slow = update(playing({ startLevel: 18 }), GRAVITY_FLOOR_MS);
+    const fast = update(playing({ startLevel: 60 }), GRAVITY_FLOOR_MS);
+    expect((fast.active as ActivePiece).y).toBe((slow.active as ActivePiece).y);
+  });
+
+  it('one long frame lands a piece exactly where many short ones do', () => {
+    const seed = 4242;
+    let stepped = playing({ seed, startLevel: 14 });
+    for (let i = 0; i < 400; i += 1) {
+      stepped = update(stepped, 8);
+    }
+    const oneGo = update(playing({ seed, startLevel: 14 }), 3200);
+    expect(oneGo.board.cells).toEqual(stepped.board.cells);
+    expect(oneGo.score).toBe(stepped.score);
+    expect(oneGo.lines).toBe(stepped.lines);
+    expect(oneGo.active).toEqual(stepped.active);
+  });
+});
+
+describe('a run that is played to the end', () => {
+  /** Drop pieces straight down until the stack reaches the ceiling. */
+  function stackToTheTop(seed: number): GameState {
+    let current = playing({ seed });
+    for (let i = 0; i < 500; i += 1) {
+      current = applyInput(current, { type: 'hardDrop' });
+      if (current.status !== 'playing') {
+        break;
+      }
+      // Sit out the clear pause, if there was one — but never past the top-out,
+      // or the snapshot carrying the `gameOver` event is thrown away.
+      const settled = update(current, LINE_CLEAR_DELAY_MS + 1);
+      if (settled.status !== 'playing') {
+        return settled;
+      }
+      current = settled;
+    }
+    return current;
+  }
+
+  it('ends, and reports the numbers it ended on', () => {
+    const over = stackToTheTop(11);
+    expect(over.status).toBe('over');
+    expect(over.active).toBeNull();
+    const ended = eventsOfType(over, 'gameOver')[0];
+    expect(ended).toEqual({
+      type: 'gameOver',
+      score: over.score,
+      lines: over.lines,
+      level: over.level,
+    });
+  });
+
+  it('leaves nothing counting down behind it', () => {
+    const over = stackToTheTop(11);
+    expect(over.clearDelayMs).toBe(0);
+    expect(over.lockMs).toBe(0);
+    expect(over.gravityMs).toBe(0);
+  });
+
+  it('is deterministic all the way to the top-out', () => {
+    expect(stackToTheTop(11)).toEqual(stackToTheTop(11));
   });
 });

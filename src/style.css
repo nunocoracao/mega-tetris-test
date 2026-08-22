@@ -87,7 +87,12 @@
   --bezel: clamp(0.25rem, 0.8vmin, 0.5rem);
   --rail: clamp(6.5rem, 15vw, 9.5rem);
 
-  /* The playfield is 22 rows: 20 in the well plus the 2-row spawn strip. */
+  /*
+   * The playfield is 22 rows: 20 in the well plus the 2-row spawn strip. These
+   * two are the engine's `BOARD_WIDTH` and `BOARD_HEIGHT` written a second
+   * time, because a stylesheet cannot import a constant — `ui/layout.test.ts`
+   * is what stops the copies drifting.
+   */
   --field-cols: 10;
   --field-rows: 22;
   --field-block-cap: 82dvh;
@@ -1417,7 +1422,8 @@ body {
  * than sitting there fully drawn and then flickering.
  *
  * The delay is tuned against the canvas sweep in `ui/effects.ts`: 22 rows at
- * roughly 24ms each. If one moves, move the other.
+ * 24ms each, and the panel comes in a little before the last of them lands.
+ * `ui/layout.test.ts` fails if the two drift apart.
  */
 @keyframes overlay-rise {
   from {
