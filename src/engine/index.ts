@@ -41,5 +41,38 @@ export {
   VISIBLE_HEIGHT,
 } from './board';
 
-export type { Bag, RandomFn } from './random';
-export { createBag, createRandom, shuffle } from './random';
+export type { Bag, BagState, RandomFn } from './random';
+export {
+  createBag,
+  createBagState,
+  createRandom,
+  drawPiece,
+  drawPieces,
+  randomStep,
+  shuffle,
+  shuffleWithState,
+} from './random';
+
+export type { GameEvent, GameInput, GameOptions, GameState, GameStatus } from './game';
+export {
+  applyInput,
+  createGame,
+  dropDistance,
+  ghostPiece,
+  gravityIntervalMs,
+  isResting,
+  levelForLines,
+  update,
+  DEFAULT_SEED,
+  GRAVITY_BASE_MS,
+  GRAVITY_FACTOR,
+  GRAVITY_FLOOR_MS,
+  HARD_DROP_POINTS,
+  LINE_CLEAR_DELAY_MS,
+  LINE_CLEAR_POINTS,
+  LINES_PER_LEVEL,
+  LOCK_DELAY_MS,
+  MAX_LOCK_RESETS,
+  NEXT_QUEUE_SIZE,
+  SOFT_DROP_POINTS,
+} from './game';
