@@ -1,5 +1,5 @@
 /**
- * Keyboard input.
+ * Keyboard input, and the auto-repeat clock every held control shares.
  *
  * Two things make keyboard controls feel good, and both live here:
  *
@@ -11,6 +11,10 @@
  *    prevented so arrows and space never scroll the page, but a shortcut with
  *    Cmd/Ctrl/Alt held, or a key pressed while a button or field has focus,
  *    is left entirely alone.
+ *
+ * The repeat clock is exported separately as `createAutoRepeat`, because a
+ * held on-screen button has to feel exactly like a held key — `ui/touch.ts`
+ * drives the same object rather than keeping a second copy of the timing.
  *
  * The binding table is exported as data. The help panel, and any future
  * remapping UI, must read `KEY_BINDINGS` rather than restate the list.
@@ -195,6 +199,106 @@ export function stepRepeat(
 }
 
 // ---------------------------------------------------------------------------
+// The shared auto-repeat clock
+// ---------------------------------------------------------------------------
+
+/**
+ * A press-and-hold driver: the part of "holding left" that is not about
+ * keyboards at all.
+ *
+ * Whatever is pressed fires once immediately. Left and right then charge DAS
+ * and stream at ARR, soft drop repeats at its own steadier rate, and every
+ * other action stays a single shot. Holding both directions at once keeps the
+ * most recently pressed one, and releasing it hands over to the other with a
+ * fresh DAS charge so the piece does not warp across the well.
+ *
+ * The keyboard and the on-screen pad each own an instance. They cannot fight
+ * over one shared hold state, and they cannot drift apart on timing either.
+ */
+export interface AutoRepeat {
+  /** Begin holding an action. Emits once now; returns `false` if already held. */
+  press(action: ActionId): boolean;
+  release(action: ActionId): void;
+  releaseAll(): void;
+  /** Drive repeats. Call once per frame with the real elapsed time. */
+  update(deltaMs: number): void;
+  isHeld(action: ActionId): boolean;
+}
+
+export function createAutoRepeat(emit: (action: ActionId) => void): AutoRepeat {
+  /** Actions currently held down. */
+  const held = new Set<ActionId>();
+  /** The direction that owns auto-repeat: the most recently pressed one. */
+  let activeDirection: 'moveLeft' | 'moveRight' | null = null;
+  let horizontalRepeat: RepeatState = FRESH_REPEAT;
+  let softRepeat: RepeatState = FRESH_REPEAT;
+
+  function releaseAll(): void {
+    held.clear();
+    activeDirection = null;
+    horizontalRepeat = FRESH_REPEAT;
+    softRepeat = FRESH_REPEAT;
+  }
+
+  return {
+    press(action: ActionId): boolean {
+      if (held.has(action)) {
+        return false;
+      }
+      held.add(action);
+
+      if (action === 'moveLeft' || action === 'moveRight') {
+        activeDirection = action;
+        horizontalRepeat = FRESH_REPEAT;
+      } else if (action === 'softDrop') {
+        softRepeat = FRESH_REPEAT;
+      }
+
+      emit(action);
+      return true;
+    },
+
+    release(action: ActionId): void {
+      held.delete(action);
+
+      if (action === activeDirection) {
+        const other = action === 'moveLeft' ? 'moveRight' : 'moveLeft';
+        activeDirection = held.has(other) ? other : null;
+        horizontalRepeat = FRESH_REPEAT;
+      }
+    },
+
+    releaseAll,
+
+    update(deltaMs: number): void {
+      if (activeDirection !== null) {
+        const stepped = stepRepeat(horizontalRepeat, deltaMs, DAS_DELAY_MS, ARR_INTERVAL_MS);
+        horizontalRepeat = stepped.state;
+        for (let i = 0; i < stepped.repeats; i += 1) {
+          emit(activeDirection);
+        }
+      }
+      if (held.has('softDrop')) {
+        const stepped = stepRepeat(
+          softRepeat,
+          deltaMs,
+          SOFT_DROP_INTERVAL_MS,
+          SOFT_DROP_INTERVAL_MS,
+        );
+        softRepeat = stepped.state;
+        for (let i = 0; i < stepped.repeats; i += 1) {
+          emit('softDrop');
+        }
+      }
+    },
+
+    isHeld(action: ActionId): boolean {
+      return held.has(action);
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The keyboard controller
 // ---------------------------------------------------------------------------
 
@@ -229,42 +333,7 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
  */
 export function createKeyboardInput(options: KeyboardInputOptions): KeyboardInput {
   const target = options.target ?? window;
-  const emit = options.onAction;
-
-  /** Actions whose key is currently down. */
-  const held = new Set<ActionId>();
-  /** The direction that owns auto-repeat: the most recently pressed one. */
-  let activeDirection: 'moveLeft' | 'moveRight' | null = null;
-  let horizontalRepeat: RepeatState = FRESH_REPEAT;
-  let softRepeat: RepeatState = FRESH_REPEAT;
-
-  function press(binding: KeyBinding): void {
-    if (held.has(binding.action)) {
-      return;
-    }
-    held.add(binding.action);
-
-    if (binding.action === 'moveLeft' || binding.action === 'moveRight') {
-      activeDirection = binding.action;
-      horizontalRepeat = FRESH_REPEAT;
-    } else if (binding.action === 'softDrop') {
-      softRepeat = FRESH_REPEAT;
-    }
-
-    emit(binding.action);
-  }
-
-  function release(action: ActionId): void {
-    held.delete(action);
-
-    if (action === activeDirection) {
-      // Fall back to the opposite direction if it is still down, and give it a
-      // fresh DAS charge so it does not warp across the board.
-      const other = action === 'moveLeft' ? 'moveRight' : 'moveLeft';
-      activeDirection = held.has(other) ? other : null;
-      horizontalRepeat = FRESH_REPEAT;
-    }
-  }
+  const repeat = createAutoRepeat(options.onAction);
 
   function onKeyDown(event: Event): void {
     if (!(event instanceof KeyboardEvent) || event.defaultPrevented) {
@@ -292,7 +361,7 @@ export function createKeyboardInput(options: KeyboardInputOptions): KeyboardInpu
     if (event.repeat) {
       return;
     }
-    press(binding);
+    repeat.press(binding.action);
   }
 
   function onKeyUp(event: Event): void {
@@ -303,15 +372,12 @@ export function createKeyboardInput(options: KeyboardInputOptions): KeyboardInpu
     // key that went down before Cmd was pressed avoids getting stuck on.
     const binding = findBinding(event.key);
     if (binding !== undefined) {
-      release(binding.action);
+      repeat.release(binding.action);
     }
   }
 
   function releaseAll(): void {
-    held.clear();
-    activeDirection = null;
-    horizontalRepeat = FRESH_REPEAT;
-    softRepeat = FRESH_REPEAT;
+    repeat.releaseAll();
   }
 
   target.addEventListener('keydown', onKeyDown);
@@ -320,25 +386,7 @@ export function createKeyboardInput(options: KeyboardInputOptions): KeyboardInpu
 
   return {
     update(deltaMs: number): void {
-      if (activeDirection !== null) {
-        const stepped = stepRepeat(horizontalRepeat, deltaMs, DAS_DELAY_MS, ARR_INTERVAL_MS);
-        horizontalRepeat = stepped.state;
-        for (let i = 0; i < stepped.repeats; i += 1) {
-          emit(activeDirection);
-        }
-      }
-      if (held.has('softDrop')) {
-        const stepped = stepRepeat(
-          softRepeat,
-          deltaMs,
-          SOFT_DROP_INTERVAL_MS,
-          SOFT_DROP_INTERVAL_MS,
-        );
-        softRepeat = stepped.state;
-        for (let i = 0; i < stepped.repeats; i += 1) {
-          emit('softDrop');
-        }
-      }
+      repeat.update(deltaMs);
     },
     releaseAll,
     destroy(): void {
