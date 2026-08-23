@@ -182,6 +182,7 @@ export {
   spinKind,
   spinTable,
   update,
+  winMatch,
   GAME_MODES,
   MODE_RULES,
   SPRINT_GOAL_LINES,

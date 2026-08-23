@@ -303,6 +303,21 @@ interface Popup {
   still: boolean;
 }
 
+/**
+ * Where the two match labels go, in board rows.
+ *
+ * An attack leaves over the top of the well and a block happens at the floor,
+ * which is where the rows it stopped would have come in — so each cue is where
+ * the thing it describes actually happened. Both are inside the field, so
+ * neither covers a well that is not this one.
+ */
+const ATTACK_LABEL_ROW = 4;
+const CANCEL_LABEL_ROWS_UP = 3;
+
+/** How hard rising garbage jolts the well, per row, in cells. */
+const GARBAGE_SHAKE_CELLS = 0.16;
+const GARBAGE_SHAKE_MS = 200;
+
 /** Four cells is a piece; the squash never covers more than one. */
 const SQUASH_CELLS = 4;
 
@@ -759,6 +774,38 @@ export function createEffects(options: EffectsOptions): Effects {
 
         case 'rowsCleared':
           spawnClear(previousBoard, lock, event);
+          break;
+
+        // The three moments of a match that are not already on the board.
+        // Compact on purpose: a label at the top of the well for what left, one
+        // at the floor for what was eaten before it could land, and a jolt for
+        // rows actually arriving. None of them covers the field, and all three
+        // go through `spawnPopup`, which holds rather than rises under reduced
+        // motion like every other label the game shows.
+        case 'attack':
+          if (event.sent > 0) {
+            spawnPopup(previousBoard.width / 2, ATTACK_LABEL_ROW, `SENT ${event.sent}`, true);
+          }
+          break;
+
+        case 'garbageCancelled':
+          spawnPopup(
+            previousBoard.width / 2,
+            previousBoard.height - CANCEL_LABEL_ROWS_UP,
+            `BLOCKED ${event.rows}`,
+            true,
+          );
+          break;
+
+        case 'garbageRose':
+          if (!calm()) {
+            shakeAgeMs = 0;
+            shakeLifeMs = GARBAGE_SHAKE_MS;
+            shakeAmplitude = Math.min(
+              SHAKE_AMPLITUDE_MAX,
+              GARBAGE_SHAKE_CELLS * Math.max(1, event.rows),
+            );
+          }
           break;
 
         case 'levelUp':

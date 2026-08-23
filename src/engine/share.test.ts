@@ -494,3 +494,40 @@ describe('a link from a stranger', () => {
     }
   });
 });
+
+/**
+ * A link that claims to be a match.
+ *
+ * The game never makes one — `ui/share.ts` refuses first — but a link is a
+ * stranger's input and hand-editing one byte is free. Playing it back would
+ * show a well that never took a single row of the garbage the real run did, so
+ * the decoder refuses it in words. The three replayable modes are untouched,
+ * which is the half of this that actually needs proving.
+ */
+describe('a versus link', () => {
+  /** A payload with the mode byte written by hand, whatever the encoder thinks. */
+  function linkForMode(mode: SharePayload['mode']): string {
+    const body = sharePayloadBytes({ mode, seed: 424_242, startLevel: 1, log: emptyLog() });
+    const packed = packShare(body, null);
+    expect(packed, 'an empty log always fits').not.toBeNull();
+    return packed ?? '';
+  }
+
+  it('is refused with a sentence that says why', () => {
+    const result = decodeShare(linkForMode('versus'));
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.reason).toBe('match');
+    expect(result.ok === false && result.message).toMatch(/match cannot be replayed/);
+  });
+
+  it('leaves every mode that can be replayed exactly as it was', () => {
+    for (const mode of ['marathon', 'sprint', 'ultra'] as const) {
+      const result = decodeShare(linkForMode(mode));
+
+      expect(result.ok, mode).toBe(true);
+      expect(result.ok && result.run.mode).toBe(mode);
+      expect(result.ok && result.run.seed).toBe(424_242);
+    }
+  });
+});

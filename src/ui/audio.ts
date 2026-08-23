@@ -51,6 +51,9 @@ export type SoundCue =
   | 'spin'
   | 'levelUp'
   | 'tick'
+  | 'attack'
+  | 'block'
+  | 'garbage'
   | 'finish'
   | 'gameOver';
 
@@ -130,6 +133,21 @@ const CUES: Readonly<Record<Exclude<SoundCue, 'clear'>, readonly ToneSpec[]>> = 
   // in a twentieth of a second. It fires once per second of an Ultra's last
   // ten, and once per line of a Sprint's last few.
   tick: [{ wave: 'square', startHz: 784, endHz: 784, delayMs: 0, durationMs: 46, gain: 0.3 }],
+  // Rows leaving for the other well: a short rising sweep, going away from you.
+  // Deliberately thin — it fires under a clear cue that is already playing, and
+  // two fat sounds at once is a mess rather than an event.
+  attack: [{ wave: 'sawtooth', startHz: 330, endHz: 740, delayMs: 0, durationMs: 120, gain: 0.26 }],
+  // An attack eaten before it landed: the same sweep, inverted and stopped
+  // dead. Cancelling is the good half of taking a hit, and it sounds like it.
+  block: [
+    { wave: 'square', startHz: 660, endHz: 392, delayMs: 0, durationMs: 70, gain: 0.3 },
+    { wave: 'square', startHz: 392, endHz: 392, delayMs: 60, durationMs: 60, gain: 0.26 },
+  ],
+  // Rows arriving under the stack: a low shove. The well physically moves, so
+  // this is the noise of that rather than a warning about it.
+  garbage: [
+    { wave: 'sawtooth', startHz: 150, endHz: 88, delayMs: 0, durationMs: 130, gain: 0.34 },
+  ],
   // A run that reached its finish line rather than falling over: the level-up
   // triad, taken further and landing an octave up. Not a fanfare — the game is
   // over either way — but unmistakably not the cliff below.

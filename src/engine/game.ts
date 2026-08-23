@@ -193,7 +193,7 @@ export function levelForLines(startLevel: number, lines: number): number {
 export type GameStatus = 'ready' | 'playing' | 'paused' | 'over';
 
 /**
- * The three ways to play. Same rules, same level curve, different finish line.
+ * The four ways to play. Same rules, same level curve, different finish line.
  *
  * `marathon` — endless. The run ends when the well tops out, and that is the
  *              whole of it. This is the default and the shape the game had
@@ -202,14 +202,19 @@ export type GameStatus = 'ready' | 'playing' | 'paused' | 'over';
  *              time; a top-out before the goal is a did-not-finish.
  * `ultra`    — score as much as possible in `ULTRA_TIME_LIMIT_MS`. The result
  *              is a score; a top-out ends the run early with whatever it had.
+ * `versus`   — endless, like Marathon, but with the garbage rules switched on:
+ *              clears send rows at somebody else's well, and rows arrive from
+ *              theirs. The finish line is the *other* well topping out, which
+ *              is a thing this snapshot cannot see — so it is the caller that
+ *              pairs two games and calls `winMatch` on the survivor.
  *
- * Gravity, scoring and levels are deliberately identical across all three: a
+ * Gravity, scoring and levels are deliberately identical across all four: a
  * mode is a finish line drawn on the same game, not a different game.
  */
-export type GameMode = 'marathon' | 'sprint' | 'ultra';
+export type GameMode = 'marathon' | 'sprint' | 'ultra' | 'versus';
 
 /** Every mode, in the order the start screen offers them. */
-export const GAME_MODES: readonly GameMode[] = ['marathon', 'sprint', 'ultra'];
+export const GAME_MODES: readonly GameMode[] = ['marathon', 'sprint', 'ultra', 'versus'];
 
 /**
  * What a mode asks of a run. Zero means "no such limit", which is what makes
@@ -220,12 +225,22 @@ export interface ModeRules {
   readonly goalLines: number;
   /** Milliseconds of play that end the run. 0 for no clock. */
   readonly timeLimitMs: number;
+  /**
+   * The garbage rules are part of this mode.
+   *
+   * The one thing a mode changes that is not a finish line, and it is here
+   * rather than at the call site for the same reason the other two are: a
+   * Versus run without an attack table would be a lie, and `restart` would have
+   * to remember to pass the option again.
+   */
+  readonly garbage: boolean;
 }
 
 export const MODE_RULES: Readonly<Record<GameMode, ModeRules>> = {
-  marathon: { goalLines: 0, timeLimitMs: 0 },
-  sprint: { goalLines: SPRINT_GOAL_LINES, timeLimitMs: 0 },
-  ultra: { goalLines: 0, timeLimitMs: ULTRA_TIME_LIMIT_MS },
+  marathon: { goalLines: 0, timeLimitMs: 0, garbage: false },
+  sprint: { goalLines: SPRINT_GOAL_LINES, timeLimitMs: 0, garbage: false },
+  ultra: { goalLines: 0, timeLimitMs: ULTRA_TIME_LIMIT_MS, garbage: false },
+  versus: { goalLines: 0, timeLimitMs: 0, garbage: true },
 };
 
 /** Anything at all, read as a mode. Unrecognised values are Marathon. */
@@ -246,8 +261,12 @@ export function parseGameMode(value: unknown): GameMode {
  *                  top of it. In Sprint this is a DNF.
  * `goalReached`  — the mode's line goal was met. Sprint only.
  * `timeUp`       — the mode's clock ran out. Ultra only.
+ * `won`          — the *other* well topped out first. Versus only, and the one
+ *                  outcome a snapshot cannot reach on its own: this well is
+ *                  perfectly healthy, and the news arrives from outside through
+ *                  `winMatch`.
  */
-export type RunOutcome = 'none' | 'toppedOut' | 'goalReached' | 'timeUp';
+export type RunOutcome = 'none' | 'toppedOut' | 'goalReached' | 'timeUp' | 'won';
 
 /** A finished run's outcome: everything but `none`. */
 export type FinishedOutcome = Exclude<RunOutcome, 'none'>;
@@ -522,8 +541,9 @@ export interface GameOptions {
   /** Which mode to play. Defaults to `marathon`. */
   readonly mode?: GameMode;
   /**
-   * Versus rules. Omitted — which is every solo run — means no garbage queue,
-   * no attacks and no garbage events.
+   * Versus rules. Omitted means the mode decides — which is garbage off in
+   * every mode but `versus`. Passing it turns the rules on whatever the mode
+   * says, and is how a test (or a tuned match) changes the queue delay.
    */
   readonly garbage?: GarbageOptions;
 }
@@ -931,7 +951,9 @@ export function createGame(options: GameOptions = {}): GameState {
     goalLines: rules.goalLines,
     timeLimitMs: rules.timeLimitMs,
     outcome: 'none',
-    garbageEnabled: garbage !== undefined,
+    // The mode turns the rules on; the option only tunes them. A Versus game
+    // therefore has an attack table whoever created it, and `restart` keeps it.
+    garbageEnabled: garbage !== undefined || rules.garbage,
     garbageDelayMs: Math.max(0, Math.floor(garbage?.delayMs ?? GARBAGE_DELAY_MS)),
     garbageQueue: NO_GARBAGE,
     garbageRandom: createGarbageRandom(seed),
@@ -1226,6 +1248,27 @@ export function receiveGarbage(state: GameState, rows: number): GameState {
     },
     events,
   );
+}
+
+/**
+ * End this run because the *other* well topped out.
+ *
+ * The one thing that finishes a Versus game without anything happening in it,
+ * and therefore the one exit `update` can never take: this well is fine, and
+ * losing is something that happened somewhere else. The caller that owns the
+ * pair is the only thing that can see both, so it is the caller that calls this
+ * — and it goes through `endRun` like every other ending, so a won match emits
+ * the same `runEnd` event with the same four numbers on it.
+ *
+ * Gated on `garbageEnabled`, exactly as `receiveGarbage` is: there is no path
+ * from here into a solo run, so no Marathon can end with `won`.
+ */
+export function winMatch(state: GameState): GameState {
+  if (!state.garbageEnabled || state.status === 'over' || state.status === 'ready') {
+    return withEvents(state, NO_EVENTS);
+  }
+  const events: GameEvent[] = [];
+  return withEvents(endRun(state, 'won', events), events);
 }
 
 /**

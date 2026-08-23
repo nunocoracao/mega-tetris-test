@@ -23,6 +23,7 @@
 import axe from 'axe-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { BOT_DIFFICULTIES, GAME_MODES } from '../engine';
 import { cellLabel, defaultDaily, historyCells } from './daily';
 import { createModal, focusableWithin, type Modal } from './dialog';
 import {
@@ -660,8 +661,8 @@ describe('the mode picker', () => {
     shell.overlayStart.hidden = false;
   }
 
-  it('is three real buttons in a labelled group', () => {
-    expect(shell.modeButtons).toHaveLength(3);
+  it('is one real button per mode, in a labelled group', () => {
+    expect(shell.modeButtons).toHaveLength(GAME_MODES.length);
     for (const button of shell.modeButtons) {
       expect(button.tagName).toBe('BUTTON');
       expect(button.getAttribute('type')).toBe('button');
@@ -712,6 +713,146 @@ describe('the mode picker', () => {
     first.click();
 
     expect(clicks).toBe(1);
+  });
+});
+
+/**
+ * Versus, in all three of its states.
+ *
+ * The rule the whole mode has to survive: a second well is *decoration*. The
+ * player cannot act on it, so nothing in it is focusable, nothing in it is a
+ * second live region, and what it says is one short sentence rather than a
+ * commentary. The meter beside the player's well is the same bargain — it says
+ * everything three ways for eyes and once, in words, for everybody else.
+ */
+describe('a match on the screen', () => {
+  /** The shell as `src/main.ts` leaves it once a match is dealt. */
+  function showMatch(): void {
+    document.documentElement.dataset['versus'] = 'on';
+    shell.opponent.hidden = false;
+    shell.opponentTag.textContent = 'Quick';
+    shell.opponentSummary.textContent = 'Quick opponent. Sent 4 rows. Taking 2.';
+    shell.garbage.hidden = false;
+    shell.garbage.dataset['level'] = 'imminent';
+    shell.garbageCount.textContent = '3';
+    shell.garbageLabel.textContent = '3 rows incoming, 3 landing now.';
+    for (const [index, cell] of shell.garbageSegments.entries()) {
+      cell.dataset['state'] = index < 3 ? 'imminent' : 'empty';
+    }
+  }
+
+  function showStartScreen(): void {
+    shell.overlay.hidden = false;
+    shell.overlayStart.hidden = false;
+    shell.overlayOpponent.hidden = false;
+    shell.overlayHelp.hidden = false;
+  }
+
+  function showResult(): void {
+    shell.overlay.hidden = false;
+    shell.overlayRows.hidden = false;
+    shell.overlayVersus.hidden = false;
+    shell.overlayVersus.textContent = 'Garbage sent — you 24 rows, Relentless 17 rows.';
+    shell.overlayNote.hidden = false;
+    shell.overlayNote.textContent = 'Relentless: 1 win, 0 losses.';
+  }
+
+  afterEach(() => {
+    delete document.documentElement.dataset['versus'];
+  });
+
+  it('has no violations with both wells on screen', async () => {
+    showMatch();
+
+    expect(report(await audit())).toBe('');
+  });
+
+  it('has no violations with the start screen and the opponent picker up', async () => {
+    showMatch();
+    showStartScreen();
+    fillDailyBlock();
+
+    expect(report(await audit())).toBe('');
+  });
+
+  it('has no violations on the result screen', async () => {
+    showMatch();
+    showResult();
+
+    expect(report(await audit())).toBe('');
+  });
+
+  it('adds no second live region in any of those states', () => {
+    showMatch();
+    showStartScreen();
+    showResult();
+
+    expect(root.querySelectorAll('[aria-live]')).toHaveLength(1);
+    expect(root.querySelectorAll('[aria-live="assertive"]')).toHaveLength(0);
+    expect(shell.opponentSummary.hasAttribute('aria-live')).toBe(false);
+    expect(shell.garbageLabel.hasAttribute('aria-live')).toBe(false);
+  });
+
+  it('gives the opponent’s canvas a text alternative rather than an opaque box', () => {
+    expect(shell.opponentCanvas.getAttribute('role')).toBe('img');
+    expect(shell.opponentCanvas.getAttribute('aria-labelledby')).toBe(shell.opponentSummary.id);
+    expect(shell.opponentSummary.id).not.toBe('');
+  });
+
+  it('puts nothing focusable in the opponent’s well or the meter', () => {
+    showMatch();
+
+    for (const node of [shell.opponent, shell.garbage]) {
+      expect(focusableWithin(node)).toEqual([]);
+    }
+    // The tab order is exactly what it was before there was a second well.
+    const order = focusableWithin(root)
+      .filter((node) => node.closest('.modal') === null)
+      .map((node) => node.getAttribute('aria-label') ?? node.textContent?.trim() ?? '');
+    expect(order).toEqual(['Playfield', 'Play', 'Restart', 'Help', 'Settings']);
+  });
+
+  it('shows the meter beside the well and never over either of them', () => {
+    // The one layout rule a match has. A warning that covers the field is a
+    // warning a player cannot act on.
+    expect(shell.garbage.closest('.playfield')).toBeNull();
+    expect(shell.opponent.closest('.playfield')).toBeNull();
+    expect(shell.garbage.contains(shell.playfield)).toBe(false);
+    expect(shell.opponent.contains(shell.playfield)).toBe(false);
+  });
+
+  it('keeps the meter’s picture out of the accessibility tree and its words in', () => {
+    // Three ways of saying one thing for eyes; exactly one for everybody else.
+    const stack = shell.garbageSegments[0]?.closest('ol');
+    expect(stack?.getAttribute('aria-hidden')).toBe('true');
+    expect(shell.garbageCount.getAttribute('aria-hidden')).toBe('true');
+    expect(shell.garbageLabel.classList.contains('visually-hidden')).toBe(true);
+  });
+
+  it('offers every opponent as a real, named, pressed-or-not button', () => {
+    showStartScreen();
+
+    expect(shell.opponentButtons).toHaveLength(BOT_DIFFICULTIES.length);
+    for (const button of shell.opponentButtons) {
+      expect(button.tagName).toBe('BUTTON');
+      expect(button.getAttribute('type')).toBe('button');
+      expect(['true', 'false']).toContain(button.getAttribute('aria-pressed'));
+      expect(button.closest('[role="group"]')?.getAttribute('aria-label')).toBe('Opponent');
+      // The name, and then a sentence saying what actually changes — both part
+      // of the button's own accessible name.
+      const name = button.textContent?.trim() ?? '';
+      expect(name).not.toBe('');
+      expect(name).toMatch(/Thinks for \d+ ms/);
+    }
+  });
+
+  it('joins the tab order with the rest of the start screen', () => {
+    showStartScreen();
+
+    const order = focusableWithin(root).filter((node) => node.closest('.modal') === null);
+    for (const button of shell.opponentButtons) {
+      expect(order).toContain(button);
+    }
   });
 });
 

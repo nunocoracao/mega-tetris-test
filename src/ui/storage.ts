@@ -31,7 +31,7 @@
  * each of them the one setting it owns.
  */
 
-import { parseGameMode, type GameMode } from '../engine';
+import { parseBotDifficulty, parseGameMode, type BotDifficulty, type GameMode } from '../engine';
 import { parseContrastSetting, type ContrastSetting } from './contrast';
 import {
   applyDailyRun,
@@ -51,12 +51,15 @@ import {
 import { parseMotionSetting, type MotionSetting } from './motion';
 import {
   applyRun,
+  applyVersus,
   clampStartLevel,
   defaultStats,
   sanitizeStats,
   type RunSummary,
   type Stats,
   type StatsUpdate,
+  type VersusSummary,
+  type VersusUpdate,
 } from './stats';
 import { DEFAULT_THEME, parseTheme, type ThemeId } from './theme';
 import { parsePadPreference, type PadPreference } from './touch';
@@ -73,7 +76,7 @@ export const STORAGE_KEY = 'mega-tetris:store';
  * that gets the previous version here — a store written by an older build must
  * keep working, and a player's high score is not something to shrug about.
  */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /** Everything a player can set, as one object. */
 export interface Settings {
@@ -94,6 +97,14 @@ export interface Settings {
   readonly startLevel: number;
   /** The mode the next run is played in, from the start screen's picker. */
   readonly mode: GameMode;
+  /**
+   * Which opponent a Versus match is played against.
+   *
+   * Remembered like the mode and the start level, and for the same reason:
+   * somebody who has settled on an opponent should not have to say so again
+   * every time they open the cabinet.
+   */
+  readonly botDifficulty: BotDifficulty;
   /**
    * The player has turned down — or completed — the offer to install the game.
    * The offer is made once; a browser that keeps firing `beforeinstallprompt`
@@ -131,6 +142,9 @@ export function defaultSettings(): Settings {
     // Marathon is the game as it has always been, so it is what a player who
     // has never opened the picker gets.
     mode: 'marathon',
+    // The middle opponent: quick enough to be a game, slow enough to be one you
+    // can win on the first night.
+    botDifficulty: 'medium',
     installDismissed: false,
     bindings: defaultKeyMap(),
     handling: DEFAULT_HANDLING,
@@ -183,6 +197,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     startLevel:
       typeof startLevel === 'number' ? clampStartLevel(startLevel) : defaults.startLevel,
     mode: parseGameMode(source['mode']),
+    botDifficulty: parseBotDifficulty(source['botDifficulty']),
     installDismissed: flag(source['installDismissed'], defaults.installDismissed),
     // Both owned by `ui/input.ts`, for the same reason the three-way
     // preferences are owned by their own modules: the rules for what a legal
@@ -251,6 +266,14 @@ const MIGRATIONS: Readonly<
   // says — so, once again, nothing moves and the step is here to keep the
   // table gapless.
   6: (data) => data,
+
+  // 7 → 8: a fourth mode, and an opponent to play it against. Two things arrive
+  // and neither of them has a past: an empty Versus ladder in `stats.modes`
+  // (which `sanitizeStats` builds from the engine's own mode list) and an empty
+  // win/loss record per difficulty. Nothing a version-7 player did was a match,
+  // so there is nothing to carry forward and every best they *did* set comes
+  // through beside it untouched.
+  7: (data) => data,
 };
 
 /** The oldest version we know how to read. Anything older is treated as this. */
@@ -399,6 +422,14 @@ export interface Store {
   stats(): Stats;
   /** Fold a finished run into the stats, persist, and say what it broke. */
   recordRun(run: RunSummary): StatsUpdate;
+  /**
+   * Fold a finished match into the versus record book and persist it.
+   *
+   * Called *as well as* `recordRun`, not instead of it: a match is a run — it
+   * counts in the totals like any other — and it is also a win or a loss, which
+   * is a different question with a different answer. See `applyVersus`.
+   */
+  recordVersus(match: VersusSummary): VersusUpdate;
   /** The daily challenge's streaks and history. */
   daily(): DailyStats;
   /**
@@ -521,6 +552,13 @@ export function createStore(options: StoreOptions = {}): Store {
 
     recordRun(run: RunSummary): StatsUpdate {
       const update = applyRun(data.stats, run);
+      data = { ...data, stats: update.stats };
+      save();
+      return update;
+    },
+
+    recordVersus(match: VersusSummary): VersusUpdate {
+      const update = applyVersus(data.stats, match);
       data = { ...data, stats: update.stats };
       save();
       return update;

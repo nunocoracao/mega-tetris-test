@@ -10,22 +10,27 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { SPRINT_GOAL_LINES } from '../engine';
+import { BOT_DIFFICULTIES, SPRINT_GOAL_LINES } from '../engine';
 import {
   MAX_START_LEVEL,
   applyRun,
+  applyVersus,
   bestFor,
   clampStartLevel,
   defaultStats,
   emptyBest,
   emptyModeBests,
+  emptyVersusRecord,
+  emptyVersusRecords,
   hasAnyBest,
+  hasVersusRecord,
   isHeadStart,
   isSprintFinish,
   recordsFor,
   sanitizeStats,
   type RunSummary,
   type Stats,
+  type VersusSummary,
 } from './stats';
 
 function run(overrides: Partial<RunSummary> = {}): RunSummary {
@@ -402,5 +407,100 @@ describe('an Ultra best is a score', () => {
     expect(update.records).toContain('score');
     expect(update.stats.modes.ultra.base.score).toBe(3_000);
     expect(update.stats.modes.ultra.base.durationMs).toBe(71_000);
+  });
+});
+
+/**
+ * Versus keeps a different kind of record, on purpose.
+ *
+ * A match is won or lost. The score you happened to post while winning says
+ * nothing about how close it was, and the clock says less — so there is no
+ * ladder here at all, and the only thing worth calling a best is the most
+ * garbage you have ever put across in a match you actually took.
+ */
+describe('the versus record book', () => {
+  const match = (overrides: Partial<VersusSummary> = {}): VersusSummary => ({
+    difficulty: 'medium',
+    won: true,
+    sent: 12,
+    ...overrides,
+  });
+
+  it('tracks nothing on the shared ladders', () => {
+    expect(recordsFor('versus')).toEqual([]);
+
+    const update = applyRun(defaultStats(), run({ mode: 'versus', score: 9_999, lines: 60 }));
+
+    expect(update.records).toEqual([]);
+    expect(update.isHeadlineRecord).toBe(false);
+    expect(update.stats.modes.versus).toEqual(emptyModeBests());
+  });
+
+  it('still counts a match in the totals, because a match is time spent', () => {
+    const update = applyRun(defaultStats(), run({ mode: 'versus', lines: 42 }));
+
+    expect(update.stats.gamesPlayed).toBe(1);
+    expect(update.stats.totalLines).toBe(42);
+  });
+
+  it('counts a win, a loss, and the best attack of a won match', () => {
+    const won = applyVersus(defaultStats(), match({ sent: 12 }));
+
+    expect(won.record).toEqual({ wins: 1, losses: 0, bestSent: 12 });
+    expect(won.previous).toEqual(emptyVersusRecord());
+    expect(won.isBest).toBe(true);
+
+    const lost = applyVersus(won.stats, match({ won: false, sent: 30 }));
+
+    // A big attack in a match you lost is a story, not a record.
+    expect(lost.record).toEqual({ wins: 1, losses: 1, bestSent: 12 });
+    expect(lost.isBest).toBe(false);
+  });
+
+  it('is strict: equalling your best attack is not beating it', () => {
+    const first = applyVersus(defaultStats(), match({ sent: 12 }));
+    const again = applyVersus(first.stats, match({ sent: 12 }));
+
+    expect(again.isBest).toBe(false);
+    expect(again.record).toEqual({ wins: 2, losses: 0, bestSent: 12 });
+  });
+
+  it('keeps one record per opponent, and leaves the others alone', () => {
+    const easy = applyVersus(defaultStats(), match({ difficulty: 'easy', sent: 3 }));
+    const hard = applyVersus(easy.stats, match({ difficulty: 'hard', won: false, sent: 20 }));
+
+    expect(hard.stats.versus.easy).toEqual({ wins: 1, losses: 0, bestSent: 3 });
+    expect(hard.stats.versus.hard).toEqual({ wins: 0, losses: 1, bestSent: 0 });
+    expect(hard.stats.versus.medium).toEqual(emptyVersusRecord());
+  });
+
+  it('reads an unrecognised difficulty as the middle one rather than inventing a row', () => {
+    const update = applyVersus(defaultStats(), match({ difficulty: 'brutal' as never }));
+
+    expect(Object.keys(update.stats.versus)).toEqual([...BOT_DIFFICULTIES]);
+    expect(update.stats.versus.medium.wins).toBe(1);
+  });
+
+  it('says whether an opponent has been played at all', () => {
+    expect(hasVersusRecord(emptyVersusRecord())).toBe(false);
+    expect(hasVersusRecord({ wins: 0, losses: 1, bestSent: 0 })).toBe(true);
+  });
+
+  it('goes with the rest of the record book when the player erases it', () => {
+    // A win that survived "erase everything" would be the one number on the
+    // screen that was a lie.
+    expect(defaultStats().versus).toEqual(emptyVersusRecords());
+  });
+
+  it('leaves the other modes exactly where they were', () => {
+    // The proof that a fourth mode cost the first three nothing: fold a match
+    // into a full record book and every other number is identical.
+    const played = applyRun(applyRun(defaultStats(), run()).stats, sprint()).stats;
+
+    const after = applyVersus(applyRun(played, run({ mode: 'versus' })).stats, match()).stats;
+
+    expect(after.modes.marathon).toEqual(played.modes.marathon);
+    expect(after.modes.sprint).toEqual(played.modes.sprint);
+    expect(after.modes.ultra).toEqual(played.modes.ultra);
   });
 });

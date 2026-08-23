@@ -18,9 +18,14 @@ browser.
   five-deep preview, lock delay with a reset cap, levels that speed up, spins,
   combos, a back-to-back chain, and a seeded piece stream that makes every run
   reproducible.
-- **Three ways to play.** Marathon until you top out, Sprint for the fastest 40
+- **Four ways to play.** Marathon until you top out, Sprint for the fastest 40
   lines, Ultra for the highest score in two minutes — the same game with a
   different finish line, each with its own record book. See [Modes](#modes).
+- **Somebody to beat.** Versus puts a second well on the screen and a machine
+  behind it: your clears throw garbage at it, its clears throw garbage back,
+  and the first well to top out loses. Three opponents, described by what they
+  actually do rather than by how hard they are, and a win/loss record for each.
+  See [Versus](#versus-garbage-attacks-and-the-bot).
 - **Replays, and a run in a link.** Every game is recorded as the keys you
   pressed and when — watch it back in the well at 1×, 2× or 4×, or put the whole
   run in a URL and hand it to somebody. Nothing is uploaded: the run travels in
@@ -102,10 +107,16 @@ result is called.
 | **Marathon** | You top out. *(the default)*     | A score       | A higher one  |
 | **Sprint**   | The 40th line clears             | A time        | A **lower** one |
 | **Ultra**    | Two minutes are up               | A score       | A higher one  |
+| **Versus**   | Either well tops out             | A win or a loss | Beating that opponent more often |
 
-Pick one on the start screen — three buttons beside the level picker, and the
+Pick one on the start screen — four buttons beside the level picker, and the
 choice is remembered between visits. `Restart` keeps the mode you are in;
 changing it is a fresh game.
+
+Versus is the one mode that changes a *rule* as well as a finish line: it turns
+the garbage table on, so your clears throw rows at the opponent's well and
+theirs come back at you. It is the same game otherwise — same gravity, same
+scoring, same levels. See [Versus](#versus-garbage-attacks-and-the-bot).
 
 Every run ends with a `runEnd` carrying an **outcome**, and the panel says what
 actually happened rather than only that it stopped:
@@ -115,6 +126,12 @@ actually happened rather than only that it stopped:
 | `toppedOut`   | A piece had nowhere to spawn        | *Topped out on level 6* |
 | `goalReached` | Sprint met its line goal            | *40 lines in 1:42*      |
 | `timeUp`      | Ultra's clock ran out               | *Time up — 8,400*       |
+| `won`         | The **other** well topped out first | *You win*               |
+
+`won` is the only outcome a snapshot cannot reach on its own: your well is
+perfectly healthy, and losing happened somewhere else entirely. It arrives from
+outside through `winMatch`, which is gated on the garbage rules being on — so
+no Marathon can ever end with it.
 
 A Sprint that tops out before 40 lines is a **did-not-finish**: it counts in
 your games played and your lifetime lines, and it sets no time, however quickly
@@ -123,8 +140,9 @@ this is the one place where it matters.
 
 The readout beside the well follows the mode — Marathon leads with the score,
 Sprint with a clock counting up and the lines still to go, Ultra with a clock
-counting down and the score beside it. It is one HUD parameterised three ways,
-not three HUDs. Over the last ten seconds of an Ultra and the last five lines
+counting down and the score beside it, Versus with the score and, where the
+personal best would be, the only number that decides a match: rows sent. It is
+one HUD parameterised four ways, not four HUDs. Over the last ten seconds of an Ultra and the last five lines
 of a Sprint the readout turns pink and pulses, and a dry tick counts each step
 out loud; with reduced motion the colour and the tick stay and only the pulse
 goes.
@@ -607,16 +625,78 @@ everything, because they record time spent rather than skill.
 
 ## Versus: garbage, attacks and the bot
 
-The rules for playing *against* something live in `src/engine/` alongside
-everything else, and — as of this writing — nothing renders them yet: the screen
-is a separate piece of work. What follows is the rule book, not the feature.
+Two wells, one screen, one loop. The player's field stays exactly the size and
+the shape it is in every other mode; the opponent's is a fraction of it beside
+the well, and a charging meter on the other side shows what is on its way.
 
-A versus run is an ordinary run with `garbage` passed to `createGame`. Leave it
-off and there is no queue, no attack, no garbage event and no difference of any
+A versus run is an ordinary run with the garbage rules switched on — which is
+what `mode: 'versus'` now means, so a match cannot be dealt without an attack
+table and `restart` cannot lose one. Every other mode leaves them off, and with
+them off there is no queue, no attack, no garbage event and no difference of any
 kind: marathon, sprint and ultra are byte-for-byte the runs they always were,
 and `replay.test.ts` pins the numbers a pre-versus engine produced to prove it.
 `REPLAY_FORMAT_VERSION` stays at **1** for exactly that reason — no rule an
 existing run depends on has moved.
+
+### How a match runs
+
+`src/main.ts` owns the pairing and `src/ui/versus.ts` owns the opponent;
+`game.ts` deliberately never grew a second board. One loop advances both games
+on the same delta:
+
+1. The player's `update`, and whatever their keys did before it.
+2. Whatever their clears just sent — read as the difference in `garbageSent`
+   across the frame, never from an event, because a call that applies several
+   inputs replaces its `events` each time and a clear in the middle of a
+   placement can leave none behind.
+3. The opponent's `stepBot` and `update`, on the same delta.
+4. What *it* sent, read the same way, handed to the player's `receiveGarbage`.
+5. If either well has gone, the survivor is finished with `winMatch`.
+
+Each side's own seed deals its own pieces, so a match is reproducible from the
+pair of seeds and the difficulty alone.
+
+### Seeing it coming
+
+Incoming garbage is visible **before** it lands or the mode is unfair. The meter
+beside the player's well says the same thing four ways, and colour is the last
+of them:
+
+- a **numeral** — how many rows are queued, whatever they were parcelled into;
+- a stack of blocks whose **shape** changes when a batch is about to land:
+  queued rows are narrow bars, arriving rows are full-width arrows pointing at
+  the well;
+- a **charge bar** that fills as the soonest batch counts down;
+- a sentence only assistive technology reads: *"3 rows incoming, 3 landing
+  now."*
+
+Sending, blocking and taking a hit each get a compact cue: a label at the top of
+the well for what left, one at the floor for what your clear ate before it could
+land, and a short jolt for rows actually arriving — plus a distinct synthesised
+tone for each. All of it honours `prefers-reduced-motion`, and none of it is
+drawn over either well.
+
+### The opponent, and the record
+
+Three opponents, described by what they do rather than by how hard they are —
+every number in those sentences is read out of `BOT_PROFILES`, so retuning a
+difficulty retunes what the start screen promises. The choice is remembered
+between visits, and each one keeps its own record: wins, losses, and the most
+garbage you have ever sent in a match you won. A big attack in a match you lost
+is a story, not a record.
+
+The result screen names the winner and why, and prints both halves of the
+exchange. Records live in `Stats.versus` behind `SCHEMA_VERSION` 8.
+
+### Versus runs have no replay link, and say so
+
+A tape is one player's keys against a seed. That is the whole of a solo run and
+nowhere near the whole of a match: the opponent's attacks landed on the player's
+clock at moments no tape records, so a replay built from one would show a clean
+well where the real run took four rows in the face. Both ends refuse — the panel
+offers no link and explains why, and `decodeShare` rejects a hand-edited one
+with a sentence of its own. A link that plays back the wrong match is worse than
+no link.
 
 ### Garbage
 
@@ -691,9 +771,9 @@ felt within a minute and beating one is worth nothing.
 
 | | Think | Between presses | Looks ahead | Uses hold | Misplays |
 | --- | ----- | --------------- | ----------- | --------- | -------- |
-| Easy | 380 ms | 85 ms | 1 piece | no | 32%, from the top 6 |
-| Medium | 200 ms | 50 ms | 1 piece | yes | 12%, from the top 3 |
-| Hard | 80 ms | 22 ms | 2 pieces | yes | never |
+| **Steady** (easy) | 380 ms | 85 ms | 1 piece | no | 32%, from the top 6 |
+| **Quick** (medium) | 200 ms | 50 ms | 1 piece | yes | 12%, from the top 3 |
+| **Relentless** (hard) | 80 ms | 22 ms | 2 pieces | yes | never |
 
 Its tests are behavioural, because the search should stay free to get better: on
 a fixed seed a hard bot survives two minutes and clears a hundred rows, harder
@@ -771,18 +851,25 @@ dependencies:
 
 | File         | Raw      | Gzipped     |
 | ------------ | -------- | ----------- |
-| `index.js`   | 139.4 KB | **46.3 KB** |
-| `index.css`  | 33.2 KB  | **7.1 KB**  |
+| `index.js`   | 157.0 KB | **52.0 KB** |
+| `index.css`  | 36.3 KB  | **7.7 KB**  |
 | `index.html` | 2.5 KB   | **1.1 KB**  |
-| **Total**    | 175.1 KB | **54.5 KB** |
+| **Total**    | 195.8 KB | **60.8 KB** |
 
-JS + CSS is **53.4 KB gzipped**, against a budget of 100 KB.
+JS + CSS is **59.7 KB gzipped**, against a budget of 100 KB.
 
-The versus engine cost **+1.3 KB gzipped**, all of it JS: the garbage queue and
-the attack table, which `game.ts` imports and so cannot be shaken out. The bot
-itself is free — nothing in `main.ts` reaches it yet, so Vite drops the whole of
-`engine/bot.ts` from the bundle. It will not stay free once there is a screen
-to put it on.
+The versus **screen** cost **+6.3 KB gzipped** (6.2 KB of JS, 0.1 KB of CSS),
+and most of it was already written. `engine/bot.ts` had been free until now —
+nothing reached it, so Vite dropped the whole file — and putting an opponent on
+the screen is what finally pulls the placement search, the heuristic and the
+three profiles into the bundle. The rest is `ui/versus.ts`, the second renderer
+call, the meter, the picker and the result copy. The layout itself is nearly
+free: the wrapper around the two wells is `display: contents` in every other
+mode, so there is no second set of rules for the layout it did not change.
+
+The versus **engine** before it cost **+1.3 KB gzipped**, all of it JS: the
+garbage queue and the attack table, which `game.ts` imports and so cannot be
+shaken out.
 
 The three new skins cost **+1.8 KB gzipped** (1.2 KB of CSS, 0.6 KB of JS),
 against a ceiling of about 2 KB set before any of them was written. Six blocks
@@ -953,7 +1040,7 @@ two geometry numbers CSS has to duplicate.
 
 ## Testing
 
-Around 1,300 tests, in about fifteen seconds.
+Around 1,470 tests, in about fifteen seconds.
 
 The engine carries a coverage floor because it is the part that must not rot.
 The browser layer does not, deliberately: the tests there cover the **pure**
@@ -990,14 +1077,22 @@ character swapped, a deflate bomb, and a check of the hand-rolled inflate
 against `node:zlib` at four compression levels.
 
 Two files run in jsdom rather than Node: `src/ui/a11y.test.ts` runs axe-core
-over the real shell five times (dialogs closed, the start screen and its two
-pickers showing, a replay playing, pause menu open, help panel open) and then
-checks the things a
-static audit cannot see — focus moving in and back out, `Tab` wrapping,
-`Escape` not reaching the game underneath, the background going `inert`, and
-the mode picker being three real buttons that take focus and say which one is
-chosen. Everything else runs in `node`, which is what stops a
-DOM reference sneaking into the engine.
+over the real shell eight times (dialogs closed, the start screen and its
+pickers showing, a replay playing, both wells and the incoming meter on screen,
+the match result panel, pause menu open, help panel open, settings open) and
+then checks the things a static audit cannot see — focus moving in and back
+out, `Tab` wrapping, `Escape` not reaching the game underneath, the background
+going `inert`, the mode and opponent pickers being real buttons that take focus
+and say which one is chosen, and the opponent's well putting nothing focusable
+and no second live region on the page. Everything else runs in `node`, which is
+what stops a DOM reference sneaking into the engine.
+
+`src/ui/layout.test.ts` carries the claim that a second well costs the first
+one nothing. It evaluates the stylesheet's own `min()` at a 360×640 and a
+320×568 viewport and checks the pair fits in the width a portrait phone already
+has spare, and it scans every versus-scoped rule in the sheet for the four
+properties the player's field is sized from — so a future tweak that shrinks
+the well during a match cannot land quietly.
 
 ### Playtesting
 
@@ -1059,6 +1154,10 @@ that means, for anything you add under `src/engine/`:
    determinism rule has an **external contract**: somebody may have sent that
    link to a friend last month. See
    [Replays and shared runs](#replays-and-shared-runs).
+7. **Append to `GAME_MODES`; never reorder it.** The share format writes the
+   mode as an *index* into that list, so moving an entry turns every link ever
+   made into a link to a different mode. Appending is free, which is how Versus
+   arrived without moving `REPLAY_FORMAT_VERSION`.
 
 And in the other direction: **no game rules in `src/ui/`.** If you find yourself
 writing a score, a level threshold or a board dimension there, import the

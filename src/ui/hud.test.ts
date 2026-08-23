@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BOT_DIFFICULTIES,
+  BOT_PROFILES,
   SPRINT_GOAL_LINES,
   ULTRA_TIME_LIMIT_MS,
   applyInput,
   boardFromStrings,
   createGame,
+  receiveGarbage,
   type GameEvent,
   type GameMode,
   type GameState,
@@ -30,6 +33,8 @@ import {
   formatNumber,
   hudReadout,
   menuStatValues,
+  opponentBlurb,
+  opponentLabel,
   outcomeTitle,
   overlayContent,
   overlayRowOrder,
@@ -39,7 +44,7 @@ import {
   stackHeight,
   summaryLine,
 } from './hud';
-import { applyRun, defaultStats, type RunSummary } from './stats';
+import { applyRun, applyVersus, defaultStats, type RunSummary } from './stats';
 
 const ready = createGame({ seed: 7 });
 const playing = applyInput(ready, { type: 'resume' });
@@ -810,5 +815,141 @@ describe('the playfield description, per mode', () => {
   it('leaves Marathon exactly as it was', () => {
     expect(describePlayfield(playing)).not.toContain('Sprint');
     expect(describePlayfield(playing)).not.toContain('Ultra');
+  });
+});
+
+/**
+ * Versus, in the parts of the HUD that are shared.
+ *
+ * The mode's own copy lives in `ui/versus.ts`; what is here is the readout
+ * beside the well, the sentence a screen reader gets, and the names the picker
+ * shows — all of which the other three modes also use, and none of which may
+ * change for them.
+ */
+describe('the versus HUD', () => {
+  const versus: GameState = applyInput(createGame({ seed: 7, mode: 'versus' }), {
+    type: 'resume',
+  });
+
+  it('replaces the personal best with the only number that decides a match', () => {
+    const state: GameState = { ...versus, score: 4_200, level: 3, lines: 24, garbageSent: 11 };
+    const readout = hudReadout(state);
+
+    expect(readout.title).toBe('Score');
+    expect(readout.value).toBe('4,200');
+    expect(readout.rows.map((row) => row.label)).toEqual(['Sent', 'Level', 'Lines']);
+    expect(readout.rows.map((row) => row.value)).toEqual(['11', '3', '24']);
+    // There is no Versus ladder to be past, so nothing is ever lit for it.
+    expect(readout.beatingBest).toBe(false);
+    expect(readout.urgent).toBe(false);
+  });
+
+  it('says what has crossed the screen in the playfield description', () => {
+    const state: GameState = { ...versus, garbageSent: 7 };
+    const hit = receiveGarbage(state, 3);
+
+    expect(describePlayfield(hit)).toContain('Versus: 7 rows sent, 3 incoming.');
+    // And the other three modes are untouched by it.
+    expect(describePlayfield(playing)).not.toContain('Versus');
+  });
+
+  it('names the winner and the loser without pretending either was a game over', () => {
+    const won = { mode: 'versus' as const, outcome: 'won' as const, score: 4_200, lines: 24, level: 3, durationMs: 192_000 };
+
+    expect(outcomeTitle(won)).toBe('You win');
+    expect(describeEvent({ type: 'runEnd', ...won })).toBe(
+      'You win. The opponent topped out. 24 lines, 4,200 points.',
+    );
+    expect(describeEvent({ type: 'runEnd', ...won, outcome: 'toppedOut' })).toBe(
+      'You topped out. The opponent wins. 24 lines, 4,200 points.',
+    );
+    // Marathon still says what it has always said.
+    expect(
+      describeEvent({ type: 'runEnd', ...won, mode: 'marathon', outcome: 'toppedOut' }),
+    ).toBe('Game over. Final score 4,200, 24 lines.');
+  });
+
+  it('describes each opponent by what it does rather than how hard it is', () => {
+    for (const difficulty of BOT_DIFFICULTIES) {
+      const blurb = opponentBlurb(difficulty);
+
+      expect(opponentLabel(difficulty)).not.toBe('');
+      expect(blurb).toMatch(/Thinks for \d+ ms/);
+      expect(blurb).toMatch(/holds/);
+      // The word the brief singles out as a non-description.
+      expect(blurb.toLowerCase()).not.toContain('hard');
+    }
+    // And the numbers are read out of the engine's own table, not retyped.
+    expect(opponentBlurb('hard')).toContain(`${BOT_PROFILES.hard.thinkMs} ms`);
+    expect(opponentBlurb('easy')).toContain('never holds');
+    expect(opponentBlurb('hard')).toContain('never misplays');
+  });
+
+  it('shows the picker on the start screen, and only there', () => {
+    expect(overlayContent(readyIn('versus'))?.showOpponent).toBe(true);
+    expect(overlayContent(readyIn('marathon'))?.showOpponent).toBe(false);
+    expect(overlayContent({ ...versus, status: 'over' })?.showOpponent).toBe(false);
+  });
+
+  it('lets the match write the whole result panel', () => {
+    const content = overlayContent(
+      { ...versus, status: 'over', outcome: 'won' },
+      {
+        versus: {
+          startNote: null,
+          result: {
+            title: 'You win',
+            hint: 'Relentless topped out after 3:12.',
+            line: 'Garbage sent — you 24 rows, Relentless 17 rows.',
+            note: 'Relentless: 1 win, 0 losses.',
+          },
+        },
+      },
+    );
+
+    expect(content?.title).toBe('You win');
+    expect(content?.hint).toBe('Relentless topped out after 3:12.');
+    expect(content?.versusLine).toBe('Garbage sent — you 24 rows, Relentless 17 rows.');
+    expect(content?.note).toBe('Relentless: 1 win, 0 losses.');
+    // No replay to offer, and nothing that pretends there is one.
+    expect(content?.showReplay).toBe(false);
+  });
+
+  it('puts the match record on the start screen where the other bests go', () => {
+    const content = overlayContent(readyIn('versus'), {
+      stats: defaultStats(),
+      versus: { startNote: 'Quick: 3 wins, 2 losses.', result: null },
+    });
+
+    expect(content?.note).toBe('Quick: 3 wins, 2 losses.');
+    // And the other modes still quote a ladder rather than a win count.
+    expect(overlayContent(readyIn('marathon'), { stats: defaultStats() })?.note).toBeNull();
+  });
+
+  it('adds a row per opponent to the pause menu, hidden until it is played', () => {
+    const keys = MENU_STATS.map((row) => row.key);
+    expect(keys).toContain('versusEasy');
+    expect(keys).toContain('versusMedium');
+    expect(keys).toContain('versusHard');
+
+    const fresh = menuStatValues(defaultStats());
+    expect(fresh.versusHard).toBeNull();
+
+    const played = applyVersus(defaultStats(), {
+      difficulty: 'hard',
+      won: true,
+      sent: 8,
+    }).stats;
+    expect(menuStatValues(played).versusHard).toBe('1 won, 0 lost');
+    // The other two are still untouched, and still silent.
+    expect(menuStatValues(played).versusEasy).toBeNull();
+  });
+
+  it('leaves every other row of the pause menu exactly as it was', () => {
+    const values = menuStatValues(defaultStats());
+
+    expect(values.highScore).toBe('0');
+    expect(values.sprintBest).toBeNull();
+    expect(values.gamesPlayed).toBe('0');
   });
 });

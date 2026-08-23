@@ -9,8 +9,12 @@
  */
 
 import {
+  BOT_DIFFICULTIES,
+  BOT_PROFILES,
   SPRINT_GOAL_LINES,
   VISIBLE_HEIGHT,
+  pendingGarbage,
+  type BotDifficulty,
   type FinishedOutcome,
   type GameEvent,
   type GameMode,
@@ -20,11 +24,13 @@ import type { PieceKind, SpinKind } from '../engine';
 import {
   MODE_HEADLINE,
   bestFor,
+  hasVersusRecord,
   type Best,
   type RecordKind,
   type RunSummary,
   type Stats,
   type StatsUpdate,
+  type VersusRecord,
 } from './stats';
 import type { Shell } from './shell';
 
@@ -70,6 +76,7 @@ export const MODE_LABELS: Readonly<Record<GameMode, string>> = {
   marathon: 'Marathon',
   sprint: 'Sprint',
   ultra: 'Ultra',
+  versus: 'Versus',
 };
 
 /** The one-line pitch under each name on the start screen's picker. */
@@ -77,7 +84,68 @@ export const MODE_BLURBS: Readonly<Record<GameMode, string>> = {
   marathon: 'Play until you top out',
   sprint: `Clear ${SPRINT_GOAL_LINES} lines as fast as you can`,
   ultra: 'Score as much as you can in two minutes',
+  versus: 'Two wells, one screen — first to top out loses',
 };
+
+// ---------------------------------------------------------------------------
+// Naming an opponent
+// ---------------------------------------------------------------------------
+
+/**
+ * What each bot difficulty is called.
+ *
+ * Names rather than rankings, because "hard" is not a description of anything —
+ * it tells a player how they are expected to feel rather than what the machine
+ * across the screen actually does. The sentence under the name is where the
+ * honesty lives, and every fact in it is read out of `BOT_PROFILES`.
+ */
+export const OPPONENT_LABELS: Readonly<Record<BotDifficulty, string>> = {
+  easy: 'Steady',
+  medium: 'Quick',
+  hard: 'Relentless',
+};
+
+export function opponentLabel(difficulty: BotDifficulty): string {
+  return OPPONENT_LABELS[difficulty];
+}
+
+/**
+ * What choosing this opponent actually changes, in plain numbers.
+ *
+ * Generated from the profile rather than written down, so retuning a difficulty
+ * retunes what the start screen promises — the same no-drift rule the help
+ * panel's scoring table lives by. Four dials, four clauses: how long it thinks,
+ * whether it plans past the falling piece, whether it holds, and how often it
+ * throws a piece away.
+ */
+export function opponentBlurb(difficulty: BotDifficulty): string {
+  const profile = BOT_PROFILES[difficulty];
+  const clauses = [
+    `Thinks for ${formatNumber(profile.thinkMs)} ms a piece`,
+    profile.useHold ? 'holds' : 'never holds',
+    ...(profile.lookahead > 1 ? ['plans one piece ahead'] : []),
+    profile.mistakeChance > 0
+      ? `misplays about ${formatNumber(Math.round(profile.mistakeChance * 100))} in 100`
+      : 'never misplays',
+  ];
+  return `${clauses.join(', ')}.`;
+}
+
+/**
+ * A versus record in one line, or `null` before the first match against this
+ * opponent — the same "say nothing rather than say zero" rule the other ladders
+ * follow.
+ */
+export function versusRecordLine(difficulty: BotDifficulty, record: VersusRecord): string | null {
+  if (!hasVersusRecord(record)) {
+    return null;
+  }
+  const wins = record.wins === 1 ? '1 win' : `${formatNumber(record.wins)} wins`;
+  const losses = record.losses === 1 ? '1 loss' : `${formatNumber(record.losses)} losses`;
+  const best =
+    record.bestSent > 0 ? ` Best win sent ${formatNumber(record.bestSent)} rows.` : '';
+  return `${opponentLabel(difficulty)}: ${wins}, ${losses}.${best}`;
+}
 
 /**
  * Does this ladder hold a record at all?
@@ -146,8 +214,18 @@ export type MenuStatKey =
   | 'sprintHeadStart'
   | 'ultraBest'
   | 'ultraHeadStart'
+  | 'versusEasy'
+  | 'versusMedium'
+  | 'versusHard'
   | 'gamesPlayed'
   | 'totalLines';
+
+/** The three versus rows, keyed the same way the difficulties are ordered. */
+const VERSUS_MENU_KEYS: Readonly<Record<BotDifficulty, MenuStatKey>> = {
+  easy: 'versusEasy',
+  medium: 'versusMedium',
+  hard: 'versusHard',
+};
 
 export const MENU_STATS: readonly { readonly key: MenuStatKey; readonly label: string }[] = [
   { key: 'highScore', label: 'High score' },
@@ -158,6 +236,10 @@ export const MENU_STATS: readonly { readonly key: MenuStatKey; readonly label: s
   { key: 'sprintHeadStart', label: `Fastest ${SPRINT_GOAL_LINES}, head start` },
   { key: 'ultraBest', label: 'Best two minutes' },
   { key: 'ultraHeadStart', label: 'Best two minutes, head start' },
+  ...BOT_DIFFICULTIES.map((difficulty) => ({
+    key: VERSUS_MENU_KEYS[difficulty],
+    label: `Versus — ${opponentLabel(difficulty)}`,
+  })),
   { key: 'gamesPlayed', label: 'Games played' },
   { key: 'totalLines', label: 'Lines all-time' },
 ];
@@ -180,6 +262,14 @@ export function menuStatValues(stats: Stats): Readonly<Record<MenuStatKey, strin
     best.durationMs > 0 ? formatDuration(best.durationMs) : null;
   const score = (best: Best): string | null => (best.score > 0 ? formatNumber(best.score) : null);
 
+  const versus = {} as Record<MenuStatKey, string | null>;
+  for (const difficulty of BOT_DIFFICULTIES) {
+    const record = stats.versus[difficulty];
+    versus[VERSUS_MENU_KEYS[difficulty]] = hasVersusRecord(record)
+      ? `${formatNumber(record.wins)} won, ${formatNumber(record.losses)} lost`
+      : null;
+  }
+
   return {
     highScore: formatNumber(marathon.base.score),
     highestLevel: formatNumber(marathon.base.level),
@@ -189,6 +279,9 @@ export function menuStatValues(stats: Stats): Readonly<Record<MenuStatKey, strin
     sprintHeadStart: time(sprint.headStart),
     ultraBest: score(ultra.base),
     ultraHeadStart: score(ultra.headStart),
+    versusEasy: versus.versusEasy ?? null,
+    versusMedium: versus.versusMedium ?? null,
+    versusHard: versus.versusHard ?? null,
     gamesPlayed: formatNumber(stats.gamesPlayed),
     totalLines: formatNumber(stats.totalLines),
   };
@@ -224,6 +317,39 @@ export interface OverlayContent {
    * itself a daily one, which is where "copy result" belongs.
    */
   readonly showDaily: boolean;
+  /** Show the opponent picker: Versus, on the start screen, and nowhere else. */
+  readonly showOpponent: boolean;
+  /**
+   * The line that says how the match went — who sent what. `null` in every
+   * mode but Versus, and on every Versus panel but the result.
+   */
+  readonly versusLine: string | null;
+}
+
+/**
+ * The two things the overlay needs to know about a match, as finished copy.
+ *
+ * Same arrangement as the daily footnote, and for the same reason: the words
+ * belong to `ui/versus.ts`, which reads this module for its formatting. Passing
+ * strings rather than data keeps that arrow pointing one way, so nothing here
+ * has to know what a bot difficulty is.
+ */
+export interface VersusOverlay {
+  /** The record against the chosen opponent, for the start screen. */
+  readonly startNote: string | null;
+  /** The match that just ended, or `null` if the last run was not one. */
+  readonly result: VersusResultCopy | null;
+}
+
+export interface VersusResultCopy {
+  /** "You win" / "Steady wins". */
+  readonly title: string;
+  /** Why — which well topped out, and when. */
+  readonly hint: string;
+  /** The exchange: rows sent each way. */
+  readonly line: string;
+  /** The record after this match, and why there is no replay link. */
+  readonly note: string;
 }
 
 /** The things the overlay copy cannot read off the game snapshot. */
@@ -256,6 +382,8 @@ export interface OverlayView {
    * actually read.
    */
   readonly notice?: string | null;
+  /** The versus copy — see `VersusOverlay`. Absent in every other mode. */
+  readonly versus?: VersusOverlay | null;
 }
 
 /** `'—'` rather than a zero, for a best that does not exist yet. */
@@ -340,6 +468,8 @@ export function outcomeTitle(run: RunEndNaming): string {
       return `${formatNumber(run.lines)} lines in ${formatDuration(run.durationMs)}`;
     case 'timeUp':
       return `Time up — ${formatNumber(run.score)}`;
+    case 'won':
+      return 'You win';
     case 'toppedOut':
       return run.mode === 'marathon'
         ? 'Game over'
@@ -370,8 +500,12 @@ export function runEndLine(run: RunEndNaming): string {
       return `Sprint complete. ${lines} in ${formatDuration(run.durationMs)}, ${formatNumber(run.score)} points.`;
     case 'timeUp':
       return `Time up. Final score ${formatNumber(run.score)}, ${lines}.`;
+    case 'won':
+      return `You win. The opponent topped out. ${lines}, ${formatNumber(run.score)} points.`;
     case 'toppedOut':
-      return `Game over. Final score ${formatNumber(run.score)}, ${lines}.`;
+      return run.mode === 'versus'
+        ? `You topped out. The opponent wins. ${lines}, ${formatNumber(run.score)} points.`
+        : `Game over. Final score ${formatNumber(run.score)}, ${lines}.`;
   }
 }
 
@@ -389,6 +523,8 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
     ? 'Drag to slide, tap to spin, flick down to drop, swipe up to hold.'
     : 'Arrows to move and rotate, space to drop.';
 
+  const versus = view.versus ?? null;
+
   switch (state.status) {
     case 'ready': {
       const mode = state.mode;
@@ -404,16 +540,26 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
         button: 'Play',
         rows: [],
         // A notice wins over the teaser: "that link did not work" is news, and
-        // a personal best is not.
+        // a personal best is not. In Versus the teaser is the win/loss record
+        // against the chosen opponent — there is no score ladder to quote.
         note:
           view.notice ??
-          (best !== null && hasBest(best, mode)
-            ? `Your best ${MODE_LABELS[mode]}: ${bestLine(best, mode)}.`
-            : null),
+          (mode === 'versus'
+            ? (versus?.startNote ?? null)
+            : best !== null && hasBest(best, mode)
+              ? `Your best ${MODE_LABELS[mode]}: ${bestLine(best, mode)}.`
+              : null),
         showLevelSelect: true,
         showHelp: true,
-        showDaily: true,
+        // The daily challenge is a Marathon run on a shared seed and always has
+        // been, so offering it under a Versus picker is a category error as
+        // well as three hundred pixels of panel: pressing it would abandon the
+        // opponent the player had just chosen. It comes back with any of the
+        // three solo modes, which is one press away.
+        showDaily: mode !== 'versus',
         showReplay: false,
+        showOpponent: mode === 'versus',
+        versusLine: null,
       };
     }
     case 'paused':
@@ -431,6 +577,8 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
         showHelp: false,
         showDaily: false,
         showReplay: false,
+        showOpponent: false,
+        versusLine: null,
       };
     case 'over': {
       const result = view.result ?? null;
@@ -457,16 +605,21 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
               ? 'New best time!'
               : 'New high score!'
             : 'New personal best!';
+      // A finished match answers all four of these itself: who won, why, what
+      // crossed the screen, and what it did to the record. Nothing about a
+      // Versus panel is a ladder, so none of it comes out of `resultRows`.
+      const match = versus?.result ?? null;
       return {
         kind: 'over',
-        eyebrow,
-        title: outcomeTitle(run),
-        hint: outcomeHint(run),
+        eyebrow: match === null ? eyebrow : null,
+        title: match?.title ?? outcomeTitle(run),
+        hint: match?.hint ?? outcomeHint(run),
         button: 'Play again',
         rows: resultRows(run, result?.previousBest ?? null, records),
         // A daily run's footnote wins: it is the more specific fact, and a
         // daily is always played from level 1, so the two can never both apply.
         note:
+          match?.note ??
           dailyNote ??
           (result?.headStart === true
             ? `Started on level ${formatNumber(run.startLevel)}, so it is measured against your head-start ${MODE_LABELS[run.mode]} runs.`
@@ -475,6 +628,8 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
         showHelp: false,
         showDaily: dailyNote !== null,
         showReplay: view.canReplay === true,
+        showOpponent: false,
+        versusLine: match?.line ?? null,
       };
     }
     case 'playing':
@@ -746,7 +901,9 @@ export function describePlayfield(state: GameState, previewCount = 3): string {
       ? `Sprint: ${formatNumber(Math.max(0, state.goalLines - state.lines))} lines to go, ${formatDuration(state.elapsedMs)} elapsed.`
       : state.timeLimitMs > 0
         ? `Ultra: ${formatDuration(Math.max(0, state.timeLimitMs - state.elapsedMs))} left.`
-        : '';
+        : state.garbageEnabled
+          ? `Versus: ${formatNumber(state.garbageSent)} rows sent, ${formatNumber(pendingGarbage(state.garbageQueue))} incoming.`
+          : '';
 
   return [
     `Playfield, ${state.board.width} columns wide.`,
@@ -834,6 +991,25 @@ export function hudReadout(state: GameState, view: HudView = {}): HudReadout {
     };
   }
 
+  // Versus is scored like Marathon and *raced* like nothing else, so the row
+  // that would hold a personal best holds the only number that decides a match:
+  // how much you have put across. There is no Versus best to quote — the record
+  // book is wins and losses, and it is on the start screen where it belongs.
+  if (state.mode === 'versus') {
+    return {
+      title: 'Score',
+      value: formatNumber(shownScore),
+      counting: shownScore !== state.score,
+      beatingBest: false,
+      urgent: false,
+      rows: [
+        { key: 'best', label: 'Sent', value: formatNumber(state.garbageSent) },
+        level,
+        { key: 'extra', label: 'Lines', value: formatNumber(state.lines) },
+      ],
+    };
+  }
+
   if (state.timeLimitMs > 0) {
     return {
       title: 'Time left',
@@ -892,6 +1068,8 @@ export interface HudView {
   readonly canReplay?: boolean;
   /** A sentence for the start screen — see `OverlayView`. */
   readonly notice?: string | null;
+  /** The versus copy — see `VersusOverlay`. */
+  readonly versus?: VersusOverlay | null;
   /**
    * What is on the canvas is a replay, not a live game.
    *
@@ -993,7 +1171,13 @@ export function createHud(shell: Shell): Hud {
       shell.overlayRows.append(nodes.row);
     }
 
+    setText(shell.overlayVersus, content.versusLine ?? '');
+    setHidden(shell.overlayVersus, content.versusLine === null);
+
     setHidden(shell.overlayStart, !content.showLevelSelect);
+    // The opponent picker rides inside the start block, so it is hidden twice
+    // over on every other panel — which is the right way round.
+    setHidden(shell.overlayOpponent, !content.showOpponent);
     // The pair of quiet buttons under the primary one — help, and settings.
     setHidden(shell.overlayMinor, !content.showHelp);
     setHidden(shell.overlayActions, !content.showReplay);
@@ -1026,6 +1210,9 @@ export function createHud(shell: Shell): Hud {
       // the second — a signature that moved every frame would rebuild the
       // sentence every frame, which is the whole thing this exists to avoid.
       state.goalLines > 0 || state.timeLimitMs > 0 ? Math.floor(state.elapsedMs / 1000) : 0,
+      // Versus adds two numbers to the sentence, and both move on events rather
+      // than on frames — so they can join the signature as they are.
+      state.garbageEnabled ? `${state.garbageSent}/${pendingGarbage(state.garbageQueue)}` : '',
     ].join('|');
     if (signature === summarySignature) {
       return;
@@ -1091,6 +1278,7 @@ export function createHud(shell: Shell): Hud {
               dailyNote: view.dailyNote ?? null,
               canReplay: view.canReplay ?? false,
               notice: view.notice ?? null,
+              versus: view.versus ?? null,
             });
       if (overlay === null) {
         setHidden(shell.overlay, true);

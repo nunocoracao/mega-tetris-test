@@ -212,3 +212,39 @@ describe('the score-only line', () => {
     expect(text).not.toContain('#r=');
   });
 });
+
+/**
+ * A match is not a shareable run, and the refusal is a sentence rather than a
+ * silence.
+ *
+ * A tape is one player's keys against a seed. That is the whole of a solo run
+ * and nowhere near the whole of a versus one: the opponent's attacks landed on
+ * the player's clock at moments no tape records. Both ends refuse — this one so
+ * the game never makes such a link, and `decodeShare` so it never opens one.
+ */
+describe('a versus match in a link', () => {
+  it('is refused rather than built', async () => {
+    const link = await buildShareLink('https://example.test/', {
+      mode: 'versus',
+      seed: 42,
+      startLevel: 1,
+      log: emptyLog(),
+    });
+
+    expect(link.ok).toBe(false);
+    expect(link.ok === false && link.reason).toBe('match');
+  });
+
+  it('still builds a link for every mode that can actually be replayed', async () => {
+    for (const mode of ['marathon', 'sprint', 'ultra'] as const) {
+      const link = await buildShareLink('https://example.test/', {
+        mode,
+        seed: 42,
+        startLevel: 1,
+        log: emptyLog(),
+      });
+
+      expect(link.ok, mode).toBe(true);
+    }
+  });
+});

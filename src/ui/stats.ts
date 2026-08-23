@@ -24,7 +24,14 @@
  * because those are a record of time spent rather than of skill.
  */
 
-import { GAME_MODES, type FinishedOutcome, type GameMode } from '../engine';
+import {
+  BOT_DIFFICULTIES,
+  parseBotDifficulty,
+  type BotDifficulty,
+  type FinishedOutcome,
+  type GameMode,
+  GAME_MODES,
+} from '../engine';
 
 /** The lowest level a run may start on, and the highest the start screen offers. */
 export const MIN_START_LEVEL = 1;
@@ -76,13 +83,41 @@ export interface ModeBests {
   readonly headStart: Best;
 }
 
+/**
+ * What Versus remembers, per difficulty.
+ *
+ * Deliberately three small numbers rather than a ladder. Versus is not raced on
+ * a score — a match is won or lost, and the score you happened to post while
+ * winning says nothing about how close it was — so the record that means
+ * anything is how often you beat *that* opponent, and the best of it is the
+ * most garbage you have ever put across in a match you won. A big attack in a
+ * match you lost is not an achievement, it is a story.
+ */
+export interface VersusRecord {
+  readonly wins: number;
+  readonly losses: number;
+  /** Rows of garbage sent in the best won match; 0 until the first win. */
+  readonly bestSent: number;
+}
+
 export interface Stats {
   /** One record book per mode. */
   readonly modes: Readonly<Record<GameMode, ModeBests>>;
+  /** One win/loss record per bot difficulty. Versus keeps no score ladder. */
+  readonly versus: Readonly<Record<BotDifficulty, VersusRecord>>;
   /** Every run that reached an end, in any mode, head start or not. */
   readonly gamesPlayed: number;
   /** Every line ever cleared, likewise. */
   readonly totalLines: number;
+}
+
+/** A finished match, as the record book needs it. */
+export interface VersusSummary {
+  readonly difficulty: BotDifficulty;
+  /** The player's well outlasted the opponent's. */
+  readonly won: boolean;
+  /** Rows of garbage the player sent across, cancellation aside. */
+  readonly sent: number;
 }
 
 /** A run, as it stood when it ended. */
@@ -112,12 +147,21 @@ export const MODE_HEADLINE: Readonly<Record<GameMode, RecordKind>> = {
   marathon: 'score',
   sprint: 'time',
   ultra: 'score',
+  versus: 'score',
 };
 
+/**
+ * Versus tracks **nothing** on the shared ladders, and that is the point: a
+ * match is won or lost, and neither the score nor the clock says which. Its
+ * record book is `Stats.versus`, per difficulty — see `VersusRecord`. The runs
+ * still count in `gamesPlayed` and `totalLines`, because those measure time
+ * spent rather than skill.
+ */
 const MODE_RECORDS: Readonly<Record<GameMode, readonly RecordKind[]>> = {
   marathon: ['score', 'lines', 'level'],
   sprint: ['time'],
   ultra: ['score', 'lines', 'level'],
+  versus: [],
 };
 
 /** The records a mode keeps, in the order the run-summary panel lists them. */
@@ -154,13 +198,27 @@ export function emptyModeBests(): ModeBests {
   return { base: emptyBest(), headStart: emptyBest() };
 }
 
+export function emptyVersusRecord(): VersusRecord {
+  return { wins: 0, losses: 0, bestSent: 0 };
+}
+
+/** An empty record for every difficulty, built from the engine's own list. */
+export function emptyVersusRecords(): Record<BotDifficulty, VersusRecord> {
+  const records = {} as Record<BotDifficulty, VersusRecord>;
+  for (const difficulty of BOT_DIFFICULTIES) {
+    records[difficulty] = emptyVersusRecord();
+  }
+  return records;
+}
+
 export function defaultStats(): Stats {
+  const modes = {} as Record<GameMode, ModeBests>;
+  for (const mode of GAME_MODES) {
+    modes[mode] = emptyModeBests();
+  }
   return {
-    modes: {
-      marathon: emptyModeBests(),
-      sprint: emptyModeBests(),
-      ultra: emptyModeBests(),
-    },
+    modes,
+    versus: emptyVersusRecords(),
     gamesPlayed: 0,
     totalLines: 0,
   };
@@ -199,6 +257,15 @@ function sanitizeModeBests(raw: unknown): ModeBests {
   };
 }
 
+function sanitizeVersusRecord(raw: unknown): VersusRecord {
+  const source = isRecordObject(raw) ? raw : {};
+  return {
+    wins: count(source['wins']),
+    losses: count(source['losses']),
+    bestSent: count(source['bestSent']),
+  };
+}
+
 /** Any parsed value at all, coerced into a usable `Stats`. Never throws. */
 export function sanitizeStats(raw: unknown): Stats {
   const source = isRecordObject(raw) ? raw : {};
@@ -209,8 +276,14 @@ export function sanitizeStats(raw: unknown): Stats {
   for (const mode of GAME_MODES) {
     bests[mode] = sanitizeModeBests(modes[mode]);
   }
+  const stored = isRecordObject(source['versus']) ? source['versus'] : {};
+  const versus = {} as Record<BotDifficulty, VersusRecord>;
+  for (const difficulty of BOT_DIFFICULTIES) {
+    versus[difficulty] = sanitizeVersusRecord(stored[difficulty]);
+  }
   return {
     modes: bests,
+    versus,
     gamesPlayed: count(source['gamesPlayed']),
     totalLines: count(source['totalLines']),
   };
@@ -315,6 +388,7 @@ export function applyRun(stats: Stats, run: RunSummary): StatsUpdate {
 
   return {
     stats: {
+      ...stats,
       modes: { ...stats.modes, [run.mode]: withLadder(bests, headStart, nextBest) },
       gamesPlayed: stats.gamesPlayed + 1,
       totalLines: stats.totalLines + count(run.lines),
@@ -325,4 +399,53 @@ export function applyRun(stats: Stats, run: RunSummary): StatsUpdate {
     isHeadlineRecord,
     headStart,
   };
+}
+
+/**
+ * What `applyVersus` gives back: the new stats, and the record as it stood
+ * *before* the match, so the panel can say "your third win" honestly.
+ */
+export interface VersusUpdate {
+  readonly stats: Stats;
+  readonly match: VersusSummary;
+  readonly previous: VersusRecord;
+  readonly record: VersusRecord;
+  /** This win sent more garbage than any won match before it. */
+  readonly isBest: boolean;
+}
+
+/**
+ * Fold a finished match into the versus record book.
+ *
+ * Separate from `applyRun` because it answers a different question: `applyRun`
+ * asks "how far did that run get", and a match asks "did you beat that
+ * opponent". Both are called for a Versus run, and each writes only its own
+ * half — which is why `applyRun` now spreads the stats it was given rather than
+ * rebuilding the object from three fields.
+ *
+ * `bestSent` only ever moves on a **win**: the most garbage you have ever put
+ * across in a match you actually took. Strict, like every other record here.
+ */
+export function applyVersus(stats: Stats, match: VersusSummary): VersusUpdate {
+  const difficulty = parseBotDifficulty(match.difficulty);
+  const previous = stats.versus[difficulty];
+  const sent = Math.max(0, Math.floor(match.sent));
+  const isBest = match.won && sent > previous.bestSent;
+  const record: VersusRecord = {
+    wins: previous.wins + (match.won ? 1 : 0),
+    losses: previous.losses + (match.won ? 0 : 1),
+    bestSent: isBest ? sent : previous.bestSent,
+  };
+  return {
+    stats: { ...stats, versus: { ...stats.versus, [difficulty]: record } },
+    match: { ...match, difficulty, sent },
+    previous,
+    record,
+    isBest,
+  };
+}
+
+/** Has this player played a match against this opponent at all? */
+export function hasVersusRecord(record: VersusRecord): boolean {
+  return record.wins + record.losses > 0;
 }

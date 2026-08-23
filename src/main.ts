@@ -16,6 +16,7 @@
 import './style.css';
 
 import {
+  BOT_DIFFICULTIES,
   GAME_MODES,
   applyInput,
   createGame,
@@ -23,7 +24,10 @@ import {
   dailySeed,
   decodeShare,
   readShareFragment,
+  receiveGarbage,
   update,
+  winMatch,
+  type FinishedOutcome,
   type GameInput,
   type GameMode,
   type GameState,
@@ -56,7 +60,10 @@ import {
   describeEvent,
   describeRunEnd,
   menuStatValues,
+  opponentBlurb,
+  opponentLabel,
   runUrgency,
+  type VersusResultCopy,
 } from './ui/hud';
 import { createKeyboardInput, createLiveBindings, normalizeKey, type ActionId } from './ui/input';
 import { createLoop } from './ui/loop';
@@ -72,6 +79,20 @@ import { clampStartLevel, type StatsUpdate } from './ui/stats';
 import { createStore } from './ui/storage';
 import { DEFAULT_THEME, createThemePreference, themeAnnouncement } from './ui/theme';
 import { createHaptics, createTouchControls } from './ui/touch';
+import {
+  REPLAY_REFUSAL,
+  createMatch,
+  garbageMeter,
+  matchResultCopy,
+  meterSegments,
+  opponentInDanger,
+  opponentMoment,
+  opponentSummary,
+  versusOverlay,
+  versusSummary,
+  type Match,
+  type MatchResult,
+} from './ui/versus';
 
 /** How many upcoming pieces the preview shows. */
 const PREVIEW_COUNT = 3;
@@ -211,6 +232,17 @@ const next = createPiecePanelRenderer(shell.nextCanvas, {
 const hold = createPiecePanelRenderer(shell.holdCanvas, { slots: 1 });
 
 /**
+ * The opponent's well: the same renderer, a second canvas, and no effects.
+ *
+ * A `GameState` is the only thing the painter has ever known how to draw, so
+ * putting a second game on the screen needed no renderer change at all — the
+ * same dividend the replay viewer collected. It deliberately gets no `shake`,
+ * no squash and no `decorate`: the celebrations belong to the well the player
+ * is actually playing, and half the frame budget of a match is this canvas.
+ */
+const opponentBoard = createBoardRenderer(shell.opponentCanvas);
+
+/**
  * Which run the player is on, and which one "play again" should deal.
  *
  * Resolved rather than remembered: a daily attempt whose run has ended is spent,
@@ -242,6 +274,29 @@ function runOptions(kind: RunKind): { seed: number; startLevel: number; mode: Ga
 }
 
 let state: GameState = createGame(runOptions('free'));
+
+/**
+ * The opponent, when there is one.
+ *
+ * `null` in every mode but Versus, which is what makes "nothing else changed" a
+ * fact rather than a hope: the loop's extra work, the second canvas, the meter
+ * and the whole exchange are all behind this one reference being non-null.
+ * `ui/versus.ts` owns the pairing; this file owns *when* there is a pair.
+ */
+let match: Match | null = null;
+
+/**
+ * How the last match finished, as finished copy for the result screen. `null`
+ * until one ends, and cleared the moment another is dealt.
+ */
+let matchResult: VersusResultCopy | null = null;
+
+/**
+ * What the opponent's description last said. Rewriting it per frame would make
+ * the one part of the screen a player cannot act on the noisiest thing on it —
+ * see `opponentMoment`, which decides when it is worth saying anything.
+ */
+let opponentMomentSignature = '';
 
 /**
  * The tape.
@@ -338,6 +393,13 @@ function draw(): void {
     dailyNote,
     notice: startNotice,
     canReplay: lastRun !== null,
+    // The match's copy: the record on the start screen, and who won on the
+    // result screen. `null` outside Versus, which is what keeps `ui/hud.ts`
+    // from having to know what a bot difficulty is.
+    versus:
+      match === null
+        ? null
+        : versusOverlay(store.stats(), store.get('botDifficulty'), matchResult),
     replay: replaying,
     // A dialog is the conversation while it is open; two "Paused" panels
     // stacked on top of each other is one too many. A replay owns the well
@@ -367,12 +429,183 @@ function dealGame(next: GameState): void {
   startNotice = null;
   hideShareFallback();
   setState(next);
+  // A Versus game is dealt in pairs. This is the one funnel every new game goes
+  // through, so it is also the one place an opponent is dealt or dismissed.
+  openMatch(next);
+}
+
+// -- the opponent -----------------------------------------------------------
+
+/**
+ * Deal an opponent for this game, or dismiss the one that was there.
+ *
+ * The opponent's seed is its own — a fresh one per match, exactly as the
+ * player's is — so the two wells are never handed the same pieces. Both games
+ * are `versus` mode, so both have the attack table and the same queue delay,
+ * and the exchange between them is symmetric by construction rather than by
+ * agreement.
+ */
+function openMatch(next: GameState): void {
+  matchResult = null;
+  opponentMomentSignature = '';
+  match =
+    next.mode === 'versus'
+      ? createMatch({
+          seed: newSeed(),
+          difficulty: store.get('botDifficulty'),
+          startLevel: next.startLevel,
+        })
+      : null;
+  applyVersusChrome();
+}
+
+/** Drop the opponent without dealing a game — leaving for a replay. */
+function closeMatch(): void {
+  match = null;
+  matchResult = null;
+  applyVersusChrome();
+}
+
+/**
+ * Publish "there is a match on" to the stylesheet and to the two blocks beside
+ * the well.
+ *
+ * The root attribute is what turns `.wells` from `display: contents` into a
+ * real row; without it the player's field is a direct child of the body grid
+ * and every other mode's layout is untouched to the pixel.
+ */
+function applyVersusChrome(): void {
+  const on = match !== null;
+  if (on) {
+    document.documentElement.dataset['versus'] = 'on';
+  } else {
+    delete document.documentElement.dataset['versus'];
+  }
+  shell.opponent.hidden = !on;
+  shell.garbage.hidden = !on;
+  if (on) {
+    renderVersus();
+  }
+}
+
+/** Paint the opponent's well, and say something about it when it is worth it. */
+function renderVersus(): void {
+  if (match === null) {
+    return;
+  }
+  const opponent = match.state();
+  opponentBoard.render(opponent);
+
+  const danger = opponentInDanger(opponent) ? 'yes' : 'no';
+  if (shell.opponent.dataset['danger'] !== danger) {
+    shell.opponent.dataset['danger'] = danger;
+  }
+
+  // The description is rewritten only when something worth describing has
+  // happened: garbage sent, garbage taken, the stack crossing the danger line,
+  // or the run ending. Everything else is the machine playing, which nobody
+  // needs a commentary on.
+  const moment = opponentMoment(opponent);
+  if (moment !== opponentMomentSignature) {
+    opponentMomentSignature = moment;
+    setBarText(shell.opponentSummary, opponentSummary(opponent, match.difficulty()));
+  }
+
+  renderGarbageMeter();
+}
+
+/**
+ * The incoming meter.
+ *
+ * Three ways of saying one thing, and colour is the last of them: the count is
+ * a numeral, the blocks change shape as the soonest batch charges, and the bar
+ * under them is how close it is to landing. The sentence beside it is the only
+ * part assistive technology reads, and it says all three in words.
+ */
+function renderGarbageMeter(): void {
+  const meter = garbageMeter(state);
+  if (shell.garbage.dataset['level'] !== meter.level) {
+    shell.garbage.dataset['level'] = meter.level;
+  }
+  setBarText(shell.garbageCount, String(meter.rows));
+  const segments = meterSegments(meter);
+  for (const [index, node] of shell.garbageSegments.entries()) {
+    const segment = segments[index] ?? 'empty';
+    if (node.dataset['state'] !== segment) {
+      node.dataset['state'] = segment;
+    }
+  }
+  const width = `${Math.round(meter.charge * 100)}%`;
+  if (shell.garbageFill.style.width !== width) {
+    shell.garbageFill.style.width = width;
+  }
+  setBarText(shell.garbageLabel, meter.label);
+}
+
+/**
+ * Advance the opponent, and carry what it threw across the screen.
+ *
+ * The order inside a frame is: the player's game, then the opponent's, then
+ * delivery. What the player sent has already crossed over in `setState` — the
+ * moment their clear was scored — so a hard drop that clears four rows reaches
+ * the other well in the same frame the player pressed the key.
+ */
+function updateMatch(deltaMs: number): void {
+  if (match === null) {
+    return;
+  }
+  const step = match.update(deltaMs);
+  if (step.incoming > 0) {
+    setState(receiveGarbage(state, step.incoming));
+  }
+  // The other well went first, which is the whole of winning. The player's run
+  // is perfectly healthy, so nothing inside it could ever have ended it — see
+  // `winMatch`, the one exit `update` cannot take.
+  if (step.toppedOut && state.status === 'playing') {
+    setState(winMatch(state));
+  }
+  renderVersus();
+}
+
+/**
+ * Seal the match: stop the opponent, write the record, and phrase the result.
+ *
+ * Called from the one `runEnd` event, whichever well ended it — a player who
+ * topped out and a player whose opponent did both arrive here, and the only
+ * difference is `outcome`.
+ */
+function finishMatch(outcome: FinishedOutcome, durationMs: number): void {
+  if (match === null) {
+    return;
+  }
+  match.stop();
+  const result: MatchResult = {
+    difficulty: match.difficulty(),
+    won: outcome === 'won',
+    sent: state.garbageSent,
+    // What the machine put across, not what landed: rows still in the queue
+    // when the match ended were still sent, and cancelling them was work.
+    received: match.sent(),
+    durationMs,
+  };
+  matchResult = matchResultCopy(result, store.recordVersus(versusSummary(result)));
+  opponentMomentSignature = '';
+  renderVersus();
 }
 
 /** Take the new snapshot and say anything worth saying about how we got here. */
 function setState(nextState: GameState): void {
   const previous = state;
   state = nextState;
+
+  // What the player just sent, read from the snapshot rather than from an
+  // event. `garbageSent` is a running total and cannot be missed; an `attack`
+  // event can be, because a call that applies several inputs replaces its
+  // events each time. The opponent's half is read the same way, in `Match`.
+  if (match !== null && state.garbageSent > previous.garbageSent) {
+    match.attack(state.garbageSent - previous.garbageSent);
+  }
+
   if (state.events.length === 0) {
     return;
   }
@@ -407,6 +640,20 @@ function setState(nextState: GameState): void {
       audio.play('hardDrop');
     } else if (event.type === 'levelUp') {
       audio.play('levelUp');
+    } else if (event.type === 'attack') {
+      // Only what actually crossed. An attack entirely eaten by the queue is a
+      // block, and the block below is the cue it earns.
+      if (event.sent > 0) {
+        audio.play('attack');
+      }
+    } else if (event.type === 'garbageCancelled') {
+      audio.play('block');
+    } else if (event.type === 'garbageRose') {
+      // Rows arriving under the stack are worth feeling as well as hearing:
+      // the well physically moved, and the piece in the player's hand is now
+      // somewhere else.
+      audio.play('garbage');
+      haptics.clear();
     } else if (event.type === 'runEnd') {
       // Reaching a finish line and falling over are not the same news, and the
       // cabinet should not use the same three notes for both.
@@ -427,18 +674,29 @@ function setState(nextState: GameState): void {
       // run, never at the start of it, so a refresh, a crash or a closed laptop
       // mid-game costs the player nothing.
       recordDailyRun(event.score, event.lines, event.level, event.durationMs);
+      // The match's own record, and the sentences the result screen shows. A
+      // no-op in every other mode, because there is no match to seal.
+      finishMatch(event.outcome, event.durationMs);
       // The tape, sealed. A truncated one is deliberately *not* offered: it is
       // a correct prefix of the run rather than the whole of it, and a "watch
       // replay" that stopped forty seconds early would be worse than no button.
+      //
+      // Neither is a match. The tape holds the player's keys against a seed,
+      // which is the whole of a solo run and nowhere near the whole of this
+      // one: the opponent's attacks landed on this clock at moments no tape
+      // records, so a replay built from it would show a clean well where the
+      // real run took four rows in the face. `REPLAY_REFUSAL` is the sentence
+      // the panel shows instead.
       recorder.mark(state.elapsedMs);
-      lastRun = recorder.truncated()
-        ? null
-        : {
-            seed: state.seed,
-            startLevel: state.startLevel,
-            mode: state.mode,
-            log: recorder.log(),
-          };
+      lastRun =
+        recorder.truncated() || state.mode === 'versus'
+          ? null
+          : {
+              seed: state.seed,
+              startLevel: state.startLevel,
+              mode: state.mode,
+              log: recorder.log(),
+            };
       focusPlayAgain = true;
     } else if (event.type === 'hold') {
       audio.play('rotate');
@@ -461,6 +719,15 @@ function send(input: GameInput): void {
   // pressed the key, which is the moment a replay has to press it again.
   recorder.record(state.elapsedMs, input.type);
   setState(applyInput(state, input));
+  // The two inputs that are not about a piece are about the whole match: an
+  // opponent that kept playing through a pause would be taking free ground.
+  if (match !== null) {
+    if (input.type === 'pause') {
+      match.pause();
+    } else if (input.type === 'resume') {
+      match.resume();
+    }
+  }
 }
 
 /**
@@ -863,6 +1130,7 @@ function resetAllSettings(): void {
   // that has to be told what the store now says.
   shell.startLevel.value = String(defaults.startLevel);
   applyMode();
+  applyOpponent();
   if (state.status === 'ready') {
     dealGame(createGame({ seed: state.seed, startLevel: defaults.startLevel, mode: defaults.mode }));
   }
@@ -1122,6 +1390,10 @@ function openReplay(request: ReplayRequest): void {
   countdown.cancel();
   closeMenus();
   hideShareFallback();
+  // Watching a recording is the clearest possible statement that the match on
+  // the field is over — and two wells behind a replay bar would be a lie about
+  // what is being watched.
+  closeMatch();
   // Keys held down when the replay opened belong to the game that has just
   // stopped being on screen.
   input.releaseAll();
@@ -1253,7 +1525,9 @@ shell.overlayShare.addEventListener('click', () => {
       });
       offerManualCopy(
         fallback,
-        'That run is too long to fit in a link. Here is the score instead, ready to copy.',
+        link.reason === 'match'
+          ? `${REPLAY_REFUSAL} Here is the result instead, ready to copy.`
+          : 'That run is too long to fit in a link. Here is the score instead, ready to copy.',
       );
     })
     .catch(() => {
@@ -1397,6 +1671,10 @@ const loop = createLoop({
     touch.update(deltaMs);
     countdown.update(deltaMs);
     setState(update(state, deltaMs));
+    // The other well, on the same delta and immediately after. Nothing here
+    // touches the player's game except through `receiveGarbage` and `winMatch`,
+    // both of which are ordinary engine calls on an ordinary snapshot.
+    updateMatch(deltaMs);
     // One number, once a frame, after the fact. The recorder cannot change what
     // the engine just did because it runs after the engine has done it.
     recorder.mark(state.elapsedMs);
@@ -1620,6 +1898,42 @@ for (const [index, button] of shell.modeButtons.entries()) {
 }
 
 /**
+ * The start screen's opponent picker.
+ *
+ * The mode picker's arrangement with a different vocabulary, and for the same
+ * reason: the choice deserves its blurb. "Thinks for 80 ms and never throws a
+ * placement away" is a thing a player can decide about; "Hard" is a thing a
+ * player can only find out by losing to it. Every number in those sentences is
+ * read out of `BOT_PROFILES` — see `opponentBlurb`.
+ */
+function applyOpponent(): void {
+  const current = store.get('botDifficulty');
+  for (const [index, button] of shell.opponentButtons.entries()) {
+    button.setAttribute('aria-pressed', String(BOT_DIFFICULTIES[index] === current));
+  }
+  shell.opponentTag.textContent = opponentLabel(current);
+}
+
+for (const [index, button] of shell.opponentButtons.entries()) {
+  const difficulty = BOT_DIFFICULTIES[index];
+  if (difficulty === undefined) {
+    continue;
+  }
+  button.addEventListener('click', () => {
+    store.set('botDifficulty', difficulty);
+    applyOpponent();
+    // Re-deal the waiting pair, so the well beside the panel is already the
+    // opponent the player just chose rather than the one they had before.
+    if (state.status === 'ready') {
+      const level = store.get('startLevel');
+      dealGame(createGame({ seed: state.seed, startLevel: level, mode: store.get('mode') }));
+    }
+    hud.announce(`${opponentLabel(difficulty)}. ${opponentBlurb(difficulty)}`);
+    draw();
+  });
+}
+
+/**
  * The start screen's level picker.
  *
  * Changing it re-deals the waiting game rather than only remembering a number,
@@ -1737,6 +2051,11 @@ applyTheme();
 // other before the first paint, so the attract screen opens already set.
 shell.startLevel.value = String(store.get('startLevel'));
 applyMode();
+applyOpponent();
+// The opening snapshot is the one game that does not come through `dealGame`,
+// so it is the one that has to be paired by hand. A cabinet left in Versus
+// therefore opens with both wells on screen rather than one.
+openMatch(state);
 renderDaily();
 loop.start();
 draw();
@@ -1787,6 +2106,18 @@ if (import.meta.env.DEV) {
     startDaily: startDailyRun,
     recorder: () => ({ entries: recorder.size(), truncated: recorder.truncated() }),
     lastRun: () => lastRun,
+    versus: () =>
+      match === null
+        ? null
+        : {
+            difficulty: match.difficulty(),
+            opponent: match.state(),
+            bot: match.bot(),
+            sent: state.garbageSent,
+            received: match.sent(),
+            meter: garbageMeter(state),
+            result: matchResult,
+          },
     replay: () => ({
       active: replayViewer.active(),
       playing: replayViewer.playing(),

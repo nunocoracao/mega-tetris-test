@@ -14,7 +14,14 @@ import { describe, expect, it } from 'vitest';
 
 import { defaultDaily, type DailyEntry } from './daily';
 import { DEFAULT_HANDLING, defaultKeyMap } from './input';
-import { defaultStats, emptyModeBests, type Best, type RunSummary, type Stats } from './stats';
+import {
+  defaultStats,
+  emptyModeBests,
+  emptyVersusRecords,
+  type Best,
+  type RunSummary,
+  type Stats,
+} from './stats';
 import {
   LEGACY_KEYS,
   detectStorageArea,
@@ -234,6 +241,7 @@ describe('round tripping', () => {
     first.set('seenHelp', true);
     first.set('startLevel', 6);
     first.set('mode', 'sprint');
+    first.set('botDifficulty', 'hard');
     first.recordRun(run({ score: 7777, lines: 30, level: 4 }));
 
     const second = createStore({ area });
@@ -246,6 +254,7 @@ describe('round tripping', () => {
       seenHelp: true,
       startLevel: 6,
       mode: 'sprint',
+      botDifficulty: 'hard',
       installDismissed: false,
       theme: DEFAULT_THEME,
       bindings: defaultKeyMap(),
@@ -270,6 +279,36 @@ describe('round tripping', () => {
 
     expect(store.get('motion')).toBe('full');
     expect(createStore({ area }).get('motion')).toBe('full');
+  });
+
+  it('persists a match beside the run it also was', () => {
+    // Both halves are written, because they answer different questions: the run
+    // counts in the totals like any other, and the match is a win or a loss.
+    const area = memoryArea();
+    const store = createStore({ area });
+
+    store.recordRun(run({ mode: 'versus', lines: 24 }));
+    const update = store.recordVersus({ difficulty: 'hard', won: true, sent: 18 });
+
+    expect(update.record).toEqual({ wins: 1, losses: 0, bestSent: 18 });
+    expect(store.stats().totalLines).toBe(24);
+    // And it is on disk, not merely in this session.
+    expect(createStore({ area }).stats().versus.hard).toEqual({
+      wins: 1,
+      losses: 0,
+      bestSent: 18,
+    });
+  });
+
+  it('erases every match record with the rest of the book', () => {
+    const area = memoryArea();
+    const store = createStore({ area });
+    store.recordVersus({ difficulty: 'easy', won: true, sent: 9 });
+
+    store.resetStats();
+
+    expect(store.stats().versus).toEqual(emptyVersusRecords());
+    expect(createStore({ area }).stats().versus).toEqual(emptyVersusRecords());
   });
 
   it('erases the stats on request and leaves the settings alone', () => {
@@ -313,6 +352,7 @@ describe('migration', () => {
       seenHelp: true,
       startLevel: 1,
       mode: 'marathon',
+      botDifficulty: 'medium',
       installDismissed: false,
       theme: DEFAULT_THEME,
       bindings: defaultKeyMap(),
@@ -358,6 +398,7 @@ describe('migration', () => {
       seenHelp: true,
       startLevel: 4,
       mode: 'marathon',
+      botDifficulty: 'medium',
       installDismissed: false,
       theme: DEFAULT_THEME,
       bindings: defaultKeyMap(),
@@ -464,6 +505,64 @@ describe('migration', () => {
     expect(migrated.settings.bindings.hardDrop).toEqual(['Q']);
     expect(migrated.settings.mode).toBe('sprint');
     expect(migrated.stats.modes.marathon.base.score).toBe(12_345);
+  });
+
+  it('carries a version 7 store forward with an empty match record', () => {
+    // The build before there was anybody to play against. Two things arrive and
+    // neither of them has a past: a Versus ladder in `stats.modes`, which
+    // `sanitizeStats` builds from the engine's own mode list, and a win/loss
+    // record per difficulty. Nothing a version-7 player did was a match, so
+    // there is nothing to invent — and every best they *did* set survives.
+    const migrated = migrate({
+      ...version3(),
+      version: 7,
+      daily: defaultDaily(),
+      settings: { ...(version3()['settings'] as object), theme: 'lagoon' },
+    });
+
+    expect(migrated.version).toBe(SCHEMA_VERSION);
+    expect(migrated.stats.versus).toEqual(emptyVersusRecords());
+    expect(migrated.stats.modes.versus).toEqual(emptyModeBests());
+    expect(migrated.settings.botDifficulty).toBe('medium');
+    // And every number they had came with them, on the ladder they set it on.
+    expect(migrated.settings.theme).toBe('lagoon');
+    expect(migrated.settings.mode).toBe('sprint');
+    expect(migrated.stats.modes.marathon.base.score).toBe(12_345);
+    expect(migrated.stats.modes.sprint.base.durationMs).toBe(102_000);
+    expect(migrated.stats.gamesPlayed).toBe(37);
+  });
+
+  it('has a step for every version, with no gaps', () => {
+    // A gap means "cannot get from there to here", and `migrate` answers that
+    // by dropping the data. Walking every version to the current one is the
+    // cheapest possible proof that none of them loses a store.
+    for (let version = 1; version < SCHEMA_VERSION; version += 1) {
+      const migrated = migrate({ version, settings: { pad: 'on' } });
+
+      expect(migrated.version, `version ${version} did not arrive`).toBe(SCHEMA_VERSION);
+      expect(migrated.settings.pad, `version ${version} lost its settings`).toBe('on');
+    }
+  });
+
+  it('keeps a stored match record when a current store is read back', () => {
+    const versus = {
+      easy: { wins: 4, losses: 1, bestSent: 31 },
+      medium: { wins: 0, losses: 3, bestSent: 0 },
+      hard: { wins: 0, losses: 0, bestSent: 0 },
+    };
+    const migrated = migrate({ version: SCHEMA_VERSION, stats: { versus } });
+
+    expect(migrated.stats.versus).toEqual(versus);
+  });
+
+  it('repairs a hand-edited match record rather than trusting it', () => {
+    const migrated = migrate({
+      version: SCHEMA_VERSION,
+      stats: { versus: { easy: { wins: -2, losses: 'lots', bestSent: 1.9 }, hard: null } },
+    });
+
+    expect(migrated.stats.versus.easy).toEqual({ wins: 0, losses: 0, bestSent: 1 });
+    expect(migrated.stats.versus.hard).toEqual({ wins: 0, losses: 0, bestSent: 0 });
   });
 
   it('keeps a stored skin, and falls back to the default for anything else', () => {
@@ -580,6 +679,7 @@ describe('the loose keys of the ad-hoc era', () => {
       seenHelp: true,
       startLevel: 1,
       mode: 'marathon',
+      botDifficulty: 'medium',
       installDismissed: false,
       theme: DEFAULT_THEME,
       bindings: defaultKeyMap(),

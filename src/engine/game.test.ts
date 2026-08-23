@@ -20,9 +20,11 @@ import {
   isResting,
   levelForLines,
   parseGameMode,
+  receiveGarbage,
   spinKind,
   spinTable,
   update,
+  winMatch,
   GAME_MODES,
   MODE_RULES,
   SPRINT_GOAL_LINES,
@@ -46,6 +48,7 @@ import {
   type GameMode,
   type GameState,
 } from './game';
+import { pendingGarbage } from './garbage';
 import type { ActivePiece, PieceKind } from './types';
 
 /** Start a game: `createGame` hands back a `ready` state, `resume` runs it. */
@@ -1619,15 +1622,15 @@ describe('modes', () => {
     expect(again.elapsedMs).toBe(0);
   });
 
-  it('is the same game in all three: identical gravity, scoring and levels', () => {
-    // The only thing a mode changes is when the run stops, so up to the point
-    // where a finish line could bite, every snapshot must agree.
+  it('is the same game in every mode: identical gravity, scoring and levels', () => {
+    // The only thing a mode changes is when the run stops — and, in Versus,
+    // what a clear *sends* — so up to the point where a finish line could bite
+    // and with nothing thrown at either well, every snapshot must agree.
     const script = 12_000;
-    const [marathon, sprint, ultra] = GAME_MODES.map((mode) =>
-      update(playingIn(mode, { seed: 21 }), script),
-    ) as [GameState, GameState, GameState];
+    const played = GAME_MODES.map((mode) => update(playingIn(mode, { seed: 21 }), script));
+    const marathon = played[0] as GameState;
 
-    for (const other of [sprint, ultra]) {
+    for (const other of played.slice(1)) {
       expect(other.board.cells).toEqual(marathon.board.cells);
       expect(other.score).toBe(marathon.score);
       expect(other.lines).toBe(marathon.lines);
@@ -1635,6 +1638,29 @@ describe('modes', () => {
       expect(other.active).toEqual(marathon.active);
       expect(other.status).toBe('playing');
     }
+  });
+
+  it('turns the garbage rules on for Versus and for nothing else', () => {
+    // The one thing a mode changes that is not a finish line. Passing it at the
+    // call site used to be the only way, which meant "a Versus game without an
+    // attack table" was a shape the engine could be asked for.
+    for (const mode of GAME_MODES) {
+      expect(createGame({ seed: 7, mode }).garbageEnabled).toBe(mode === 'versus');
+      expect(MODE_RULES[mode].garbage).toBe(mode === 'versus');
+    }
+  });
+
+  it('keeps the versus rules across a restart, queue emptied', () => {
+    const match = start(createGame({ seed: 5, mode: 'versus' }));
+    const hit = receiveGarbage(match, 3);
+    expect(pendingGarbage(hit.garbageQueue)).toBe(3);
+
+    const again = applyInput(hit, { type: 'restart' });
+
+    expect(again.mode).toBe('versus');
+    expect(again.garbageEnabled).toBe(true);
+    expect(again.garbageQueue).toEqual([]);
+    expect(again.status).toBe('playing');
   });
 
   it('gains levels the usual way in a timed mode', () => {
@@ -1645,6 +1671,57 @@ describe('modes', () => {
     expect(cleared.lines).toBe(LINES_PER_LEVEL);
     expect(cleared.level).toBe(2);
     expect(eventsOfType(cleared, 'levelUp')).toHaveLength(1);
+  });
+});
+
+/**
+ * Winning: the one ending a snapshot cannot reach on its own.
+ *
+ * Everything else that stops a run is something that happened *in* it — a piece
+ * with nowhere to spawn, a fortieth line, a clock running out. A match is won
+ * when the other well goes, and this well knows nothing about that, so the news
+ * has to arrive from outside. The guards are what stop it arriving anywhere it
+ * has no business being.
+ */
+describe('winning a match', () => {
+  it('ends the run as `won`, through the same exit as every other ending', () => {
+    const match = update(start(createGame({ seed: 9, mode: 'versus' })), 3_000);
+
+    const won = winMatch(match);
+
+    expect(won.status).toBe('over');
+    expect(won.outcome).toBe('won');
+    expect(won.active).toBeNull();
+    const [ended] = eventsOfType(won, 'runEnd');
+    expect(ended?.mode).toBe('versus');
+    expect(ended?.outcome).toBe('won');
+    expect(ended?.durationMs).toBe(match.elapsedMs);
+    expect(ended?.score).toBe(match.score);
+  });
+
+  it('cannot reach a solo run, whatever the caller thinks', () => {
+    // The same guard `receiveGarbage` uses, and the reason no Marathon can ever
+    // end with an outcome the mode has no vocabulary for.
+    for (const mode of ['marathon', 'sprint', 'ultra'] as const) {
+      const solo = update(start(createGame({ seed: 9, mode })), 3_000);
+
+      const untouched = winMatch(solo);
+
+      expect(untouched.status).toBe('playing');
+      expect(untouched.outcome).toBe('none');
+      expect(untouched.events).toEqual([]);
+    }
+  });
+
+  it('does nothing to a run that has already finished, or has not begun', () => {
+    const ready = createGame({ seed: 9, mode: 'versus' });
+    expect(winMatch(ready).status).toBe('ready');
+
+    const over = winMatch(update(start(createGame({ seed: 9, mode: 'versus' })), 3_000));
+    const twice = winMatch(over);
+
+    expect(twice.outcome).toBe('won');
+    expect(eventsOfType(twice, 'runEnd')).toHaveLength(0);
   });
 });
 

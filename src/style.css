@@ -139,6 +139,35 @@
   --field-block-cap: 82dvh;
   --field-inline-reserve: calc(2 * var(--rail) + 2 * var(--gap) + 2 * var(--page-pad));
 
+  /*
+   * How tall the player's well is, written once.
+   *
+   * It used to live inline on `.playfield`; Versus needs the same number to
+   * size the opponent's well and the incoming meter against it, and a second
+   * copy of this expression is exactly the kind of thing that drifts. Every
+   * property it reads is declared on `:root` — including the three that the
+   * media queries below override — so the substitution happens after those and
+   * the number is always the one the layout is actually using.
+   */
+  --field-height: min(
+    var(--field-block-cap),
+    44rem,
+    calc((100vw - var(--field-inline-reserve)) * var(--field-rows) / var(--field-cols))
+  );
+
+  /*
+   * The opponent's well, as a fraction of the player's.
+   *
+   * Small enough that the pair fits in the width a portrait phone already has
+   * spare — at 360x640 the player's well is height-bound at about 180px wide,
+   * which leaves well over a hundred pixels doing nothing — and big enough that
+   * ten columns are still ten countable columns.
+   */
+  --opponent-scale: 0.42;
+
+  /* The incoming meter: a narrow column, never wider than a thumb. */
+  --meter-width: clamp(0.85rem, 3.2vmin, 1.35rem);
+
   /* ------------------------------------------------ contrast knobs --- */
   /*
    * The two structural things high contrast changes, expressed as properties
@@ -928,11 +957,11 @@ body {
   -webkit-touch-callout: none;
   -webkit-tap-highlight-color: transparent;
   aspect-ratio: var(--field-cols) / var(--field-rows);
-  height: min(
-    var(--field-block-cap),
-    44rem,
-    calc((100vw - var(--field-inline-reserve)) * var(--field-rows) / var(--field-cols))
-  );
+  height: var(--field-height);
+  /* Never shrunk by a neighbour. In Versus the well shares a flex row with the
+   * meter and the opponent, and the player's field is the one thing in this
+   * layout that does not give ground: the opponent absorbs the squeeze. */
+  flex: 0 0 auto;
   max-height: 100%;
   max-width: 100%;
   padding: var(--bezel);
@@ -955,6 +984,283 @@ body {
   width: 100%;
   height: 100%;
   border-radius: calc(var(--radius) - var(--bezel));
+}
+
+/* --------------------------------------------------------------- versus -- */
+
+/*
+ * The wells, and what passes between them.
+ *
+ * `display: contents` is the whole trick. In Marathon, Sprint and Ultra this
+ * wrapper generates no box at all, so `.playfield` is a direct child of
+ * `.game__body` exactly as it has always been — every grid placement, every
+ * percentage and every media query below still resolves against the same
+ * containing block, and the layout is unchanged to the pixel. A match turns it
+ * into a real flex row and the player's well keeps its size regardless: it is
+ * `flex: 0 0 auto`, and the opponent is the item that gives.
+ */
+.wells {
+  display: contents;
+}
+
+/*
+ * `align-self: stretch` is load bearing, not tidiness.
+ *
+ * `.playfield` is kept inside the leftover space by `max-height: 100%`, and a
+ * percentage needs a *definite* containing block to resolve against. As a grid
+ * item the well had one for free — a grid area is definite whatever the
+ * alignment. Inside this wrapper it does not: a centred, content-sized box has
+ * an indefinite height, the percentage resolves to `none`, and the well grows
+ * past the row it is in and out through the bottom of the pad. Stretching gives
+ * the wrapper the row's own height and the clamp works again.
+ */
+/*
+ * A flex row, and `align-self: stretch` is load bearing rather than tidiness.
+ *
+ * `.playfield` is kept inside the leftover space by `max-height: 100%`, and a
+ * percentage needs a *definite* containing block to resolve against. As a grid
+ * item the well had one for free — a grid area is definite whatever the
+ * alignment. Inside a wrapper it does not, unless the wrapper is stretched to
+ * its own parent: a content-sized box has an indefinite height, the percentage
+ * resolves to `none`, and the well grows past the row it is in and out through
+ * the bottom of the pad. Measured, not guessed — a 397px well in a 322px row.
+ *
+ * (A three-column grid with `minmax(0, 1fr)` shoulders would centre the well
+ * more exactly than a centred row does. It also loses the clamp again: the
+ * track it stretches into is sized from the item it contains, and Chrome
+ * resolves the percentage against the content height rather than the stretched
+ * one. Flex keeps the well the right size, which matters more than keeping it
+ * within fifty pixels of the middle.)
+ */
+:root[data-versus='on'] .wells {
+  display: flex;
+  align-self: stretch;
+  align-items: center;
+  justify-content: center;
+  gap: var(--gap);
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+}
+
+/*
+ * The incoming meter.
+ *
+ * Beside the well and never over it. It says the same thing three ways: a
+ * numeral, a stack of blocks whose *shape* changes as a batch charges up, and
+ * a charge bar under them. Colour is the fourth, not the first.
+ */
+.meter {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.25rem;
+  width: var(--meter-width);
+  /* The same height as the opponent's well, so the row reads as one object
+   * with the player's field in the middle of it rather than as three unrelated
+   * columns of different lengths. */
+  height: calc(var(--opponent-scale) * min(var(--field-height), 100%));
+  max-height: 100%;
+  padding: 0.2rem 0.15rem;
+  border-radius: var(--radius-sm);
+  background: var(--panel-canvas);
+  box-shadow: inset 0 0 0 1px var(--edge-soft);
+}
+
+.meter__tag,
+.meter__count {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.meter__count {
+  font-family: var(--font-numeric);
+  font-size: 0.72rem;
+  color: var(--fg);
+}
+
+/* Lit when anything at all is queued, so the number is not the only tell. */
+.meter[data-level='queued'] .meter__count {
+  color: var(--accent);
+}
+
+.meter[data-level='imminent'] .meter__count {
+  color: var(--piece-z);
+}
+
+/*
+ * The blocks, soonest at the bottom — garbage rises, so the meter fills the way
+ * the well does. `column-reverse` is what puts cell 0 on the floor.
+ */
+.meter__stack {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-height: 0;
+}
+
+.meter__cell {
+  flex: 1 1 0;
+  min-height: 2px;
+  border-radius: 1px;
+}
+
+/* Empty: an outline, so the meter has a length even when nothing is coming. */
+.meter__cell[data-state='empty'] {
+  box-shadow: inset 0 0 0 1px var(--edge-soft);
+}
+
+/*
+ * Queued: a plain block, deliberately narrower than the column. The inset is a
+ * *shape* difference, which is what a player who cannot separate coral from
+ * lilac actually reads.
+ */
+.meter__cell[data-state='queued'] {
+  margin: 0 22%;
+  background: var(--field-frame);
+}
+
+/*
+ * About to land: full width, and notched into an arrow pointing at the well it
+ * is about to fall into. Nothing about that is a colour.
+ */
+.meter__cell[data-state='imminent'] {
+  margin: 0;
+  background: var(--piece-z);
+  clip-path: polygon(0 0, 62% 0, 100% 50%, 62% 100%, 0 100%);
+}
+
+.meter__charge {
+  flex: 0 0 auto;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--edge-soft);
+  overflow: hidden;
+}
+
+.meter__charge-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  background: var(--piece-z);
+}
+
+/*
+ * The opponent's well: a fixed fraction of the player's, whatever the player's
+ * turns out to be.
+ *
+ * `min(var(--field-height), 100%)` is the well's *actual* height — the same
+ * `min()` the player's field resolves to, since `.playfield` is
+ * `height: var(--field-height)` clamped by `max-height: 100%` of this very row.
+ * Reading `--field-height` alone would be wrong on every phone, where the row
+ * is shorter than the field would like and the clamp is what is really
+ * deciding; the opponent would then be drawn against a well that is not the one
+ * on screen, and at 320px it came out nearly as wide as the player's.
+ *
+ * It can still shrink: `flex: 0 1 auto` with `min-width: 0` means a viewport
+ * too narrow for the pair squeezes *this* well, and never the player's.
+ */
+.opponent {
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  height: calc(var(--opponent-scale) * min(var(--field-height), 100%));
+  /* The height is definite, so the ratio is what makes the *width* definite
+   * too. Without it the block is auto-width around a canvas whose own width
+   * depends on a height the column has not resolved yet, and the browser falls
+   * back to the width of the name above it. */
+  aspect-ratio: var(--field-cols) / var(--field-rows);
+}
+
+.opponent__tag {
+  flex: 0 0 auto;
+  margin: 0;
+  max-width: 100%;
+  overflow: hidden;
+  font-family: var(--font-display);
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--fg-muted);
+}
+
+/* Takes whatever height the block has left after the name, and the ratio gives
+ * it its width — so the two wells are always the same shape. */
+.opponent__canvas {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: auto;
+  max-width: 100%;
+  aspect-ratio: var(--field-cols) / var(--field-rows);
+  border-radius: var(--radius-sm);
+  background: var(--field-bezel);
+  box-shadow:
+    inset 0 0 0 1px var(--edge-soft),
+    0 0.5rem 1.5rem -0.9rem var(--glow);
+}
+
+/* The machine in trouble: a rim in the warning colour, and a thicker one — the
+ * same "never colour alone" rule the meter follows. */
+.opponent[data-danger='yes'] .opponent__canvas {
+  box-shadow: inset 0 0 0 2px var(--piece-z);
+}
+
+.opponent[data-danger='yes'] .opponent__tag {
+  color: var(--piece-z);
+}
+
+/* The exchange line on the result panel. */
+.overlay__versus {
+  margin: 0.15rem 0 0;
+  font-family: var(--font-numeric);
+  font-size: clamp(0.7rem, 2.2vmin, 0.85rem);
+  color: var(--fg-muted);
+}
+
+.overlay__versus[hidden] {
+  display: none !important;
+}
+
+/*
+ * The opponent picker is the mode picker again, one notch quieter.
+ *
+ * It is the *second* choice on that panel — you pick Versus, then who you are
+ * playing — and it is only there in one mode, so it is smaller in both senses:
+ * a smaller name than a mode's, and a blurb tight enough that four modes plus
+ * three opponents still leave the Play button on screen.
+ */
+.modes--opponent .mode {
+  min-height: 2.25rem;
+  padding: 0.3rem 0.6rem;
+}
+
+.modes--opponent .mode__name {
+  font-size: 0.78rem;
+}
+
+.modes--opponent .mode__blurb {
+  font-size: 0.6rem;
+  line-height: 1.3;
 }
 
 /*
@@ -2308,6 +2614,13 @@ body {
     grid-area: 2 / 1 / 3 / 3;
   }
 
+  /* In a match the wells row is the grid item, so the placement moves with it.
+   * The rule above is left alone and simply stops applying: `.playfield` is no
+   * longer a grid child once `.wells` generates a box. */
+  :root[data-versus='on'][data-touch-pad='on'] .wells {
+    grid-area: 2 / 1 / 3 / 3;
+  }
+
   /* Each rail now has half the width, so its panels share that rather than
    * reaching for a 13rem cap they can no longer afford. The 4rem basis is what
    * keeps score and hold side by side down to a 320px screen. */
@@ -2569,6 +2882,10 @@ body {
   }
 
   :root[data-touch-pad='on'] .playfield {
+    grid-area: 1 / 2 / 2 / 3;
+  }
+
+  :root[data-versus='on'][data-touch-pad='on'] .wells {
     grid-area: 1 / 2 / 2 / 3;
   }
 

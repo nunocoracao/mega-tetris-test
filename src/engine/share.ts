@@ -33,7 +33,7 @@ import {
   type ReplayEntry,
   type ReplayLog,
 } from './replay';
-import { GAME_MODES, type GameMode } from './game';
+import { GAME_MODES, MODE_RULES, type GameMode } from './game';
 
 /** How the body was packed. 0 is the bytes as they are; 1 is zlib deflate. */
 export const SHARE_CODEC_STORED = 0;
@@ -90,7 +90,7 @@ export interface SharedRun extends SharePayload {
  * them apart is what lets "made by a newer version" say something more useful
  * than "that did not work".
  */
-export type ShareErrorReason = 'empty' | 'oversize' | 'version' | 'malformed';
+export type ShareErrorReason = 'empty' | 'oversize' | 'version' | 'malformed' | 'match';
 
 export type ShareResult =
   | { readonly ok: true; readonly run: SharedRun }
@@ -103,6 +103,8 @@ export const SHARE_ERROR_MESSAGES: Readonly<Record<ShareErrorReason, string>> = 
   version:
     'That replay link was made by a different version of Mega Tetris, so it cannot be played back here.',
   malformed: 'That replay link did not work — it looks damaged or incomplete.',
+  match:
+    'That link is a versus match, and a match cannot be replayed: the recording holds one player’s keys and not the opponent, so it would play back a different game.',
 };
 
 function reject(reason: ShareErrorReason): ShareResult {
@@ -371,6 +373,13 @@ function readBody(body: Uint8Array, version: number): ShareResult {
   const mode = GAME_MODES[modeIndex];
   if (mode === undefined) {
     return reject('malformed');
+  }
+  // A match is not a replayable run, and the game never makes such a link — but
+  // a hand-edited one costs nothing to write, and playing it back would show a
+  // well that never took a single row of the garbage the real run did. Refusing
+  // it here is the one place that catches every caller.
+  if (MODE_RULES[mode].garbage) {
+    return reject('match');
   }
   if (startLevel < 1 || startLevel > MAX_SHARE_START_LEVEL) {
     return reject('malformed');

@@ -122,16 +122,21 @@ export const MECHANIC_NOTES: readonly HelpRow[] = [
   {
     term: 'Hold',
     detail:
-      'Parks the falling piece for later and brings back whatever was already parked. One hold per piece — the slot dims until you lock something.',
+      'Parks the falling piece and brings back whatever was parked. One per piece — the slot dims until you lock.',
   },
   {
     term: 'Ghost',
-    detail: 'The hollow outline under the piece is where a hard drop would land it.',
+    detail: 'The hollow outline is where a hard drop lands the piece.',
   },
   {
     term: 'Spin',
     detail:
-      'Turn a piece into a gap it could not have slid into: rotate last, with nowhere left to move. Any piece can, and it scores whether or not it clears.',
+      'Rotate into a gap you could not slide into, with nowhere left to move. Any piece can, and it scores even with no clear.',
+  },
+  {
+    term: 'Versus',
+    detail:
+      'Clears send garbage at the other well; yours cancel what is queued against you. The meter shows what is coming. First to top out loses.',
   },
 ];
 
@@ -150,7 +155,7 @@ export function replayRows(bindings: BindingTable = DEFAULT_BINDINGS): readonly 
   return [
     {
       term: 'Watch replay',
-      detail: 'Plays your last run back in the well, exactly as it happened.',
+      detail: 'Plays your last run back, exactly as it happened.',
     },
     { term: keys('hardDrop'), detail: 'Play or pause the replay' },
     { term: '1× / 2× / 4×', detail: 'How fast it plays back' },
@@ -159,7 +164,7 @@ export function replayRows(bindings: BindingTable = DEFAULT_BINDINGS): readonly 
     {
       term: 'Copy replay link',
       detail:
-        'Puts the run in a link a friend can watch. Nothing is uploaded. A run too long to fit says so.',
+        'A link a friend can watch. Nothing is uploaded; too long, or a match, and it says so.',
     },
   ];
 }
@@ -211,9 +216,8 @@ function section(id: string, title: string, rows: readonly HelpRow[], termClass:
 export function helpBodyMarkup(bindings: BindingTable = DEFAULT_BINDINGS): string {
   return `
     <p class="help__lede">
-      Stack the falling pieces so they fill a whole row — full rows clear and
-      score. The game speeds up every ten lines. Settings remaps every key
-      below and tunes how held ones repeat.
+      Fill a whole row and it clears and scores. The game speeds up every ten
+      lines. Settings remaps every key below and tunes how held ones repeat.
     </p>
     ${section('help-modes', 'Modes', modeRows(), 'help__term')}
     ${section('help-keys', 'Keyboard', keyboardRows(bindings), 'help__keys')}

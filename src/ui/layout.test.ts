@@ -75,3 +75,147 @@ describe('the game-over panel', () => {
     expect(delayMs).toBeLessThanOrEqual(sweepMs);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The second well
+// ---------------------------------------------------------------------------
+
+/** The root font size every `rem` in this stylesheet is measured against. */
+const REM = 16;
+
+/**
+ * A CSS length in pixels at a given viewport.
+ *
+ * Only the four forms the geometry block actually uses — `rem`, `vmin`, `dvh`
+ * and `clamp()` of those — because a general CSS evaluator is a different
+ * project and this one only has to be right about the numbers below.
+ */
+function px(value: string, vw: number, vh: number): number {
+  const text = value.trim();
+  const clamp = /^clamp\(([^,]+),([^,]+),([^)]+)\)$/.exec(text);
+  if (clamp !== null) {
+    const [min, preferred, max] = clamp.slice(1).map((part) => px(part, vw, vh));
+    return Math.min(Math.max(min ?? 0, preferred ?? 0), max ?? 0);
+  }
+  const number = Number.parseFloat(text);
+  if (text.endsWith('rem')) {
+    return number * REM;
+  }
+  if (text.endsWith('vmin')) {
+    return (number / 100) * Math.min(vw, vh);
+  }
+  if (text.endsWith('dvh')) {
+    return (number / 100) * vh;
+  }
+  if (text.endsWith('vw')) {
+    return (number / 100) * vw;
+  }
+  return number;
+}
+
+/**
+ * The player's well, and the whole row it sits in during a match, at a
+ * viewport. This is the arithmetic the layout actually performs — the same
+ * `min()` the stylesheet writes once as `--field-height`.
+ */
+function wellsRow(vw: number, vh: number, blockCap: string): { field: number; row: number } {
+  const pagePad = px(rootValue('--page-pad'), vw, vh);
+  const gap = px(rootValue('--gap'), vw, vh);
+  const meter = px(rootValue('--meter-width'), vw, vh);
+  const scale = Number(rootValue('--opponent-scale'));
+  // Below 48rem the rails fold above the well, so the reserve is the page
+  // padding and nothing else.
+  const reserve = 2 * pagePad;
+  const field = Math.min(
+    px(blockCap, vw, vh),
+    44 * REM,
+    ((vw - reserve) * BOARD_HEIGHT) / BOARD_WIDTH,
+  );
+  const wellWidth = (field * BOARD_WIDTH) / BOARD_HEIGHT;
+  const opponentWidth = (field * scale * BOARD_WIDTH) / BOARD_HEIGHT;
+  return { field, row: meter + gap + wellWidth + gap + opponentWidth };
+}
+
+describe('the opponent’s well', () => {
+  it('costs the player’s well nothing, because the wrapper is not a box', () => {
+    // The whole of "nothing else moved": outside a match `.wells` generates no
+    // box at all, so `.playfield` is a direct child of the body grid exactly as
+    // it always was and every placement, percentage and media query below still
+    // resolves against the same containing block.
+    expect(/\.wells\s*\{\s*display:\s*contents;\s*\}/.test(CSS)).toBe(true);
+  });
+
+  it('changes nothing the player’s field is sized from', () => {
+    // The structural proof of "not smaller than it is today at any viewport".
+    // Every versus-scoped rule in the sheet is collected and checked against the
+    // four properties `--field-height` is built out of. If a future tweak makes
+    // the well smaller during a match, it has to go through one of these.
+    const sizing = ['--field-block-cap', '--field-inline-reserve', '--field-height', '--rail'];
+    const versusRules = [...CSS.matchAll(/:root\[data-versus='on'\][^{]*\{([^}]*)\}/g)].map(
+      (match) => match[1] ?? '',
+    );
+
+    expect(versusRules.length).toBeGreaterThan(0);
+    for (const body of versusRules) {
+      for (const property of sizing) {
+        expect(body, `a versus rule sets ${property}`).not.toContain(property);
+      }
+      expect(body).not.toContain('aspect-ratio');
+    }
+  });
+
+  it('never squeezes the player’s well, whatever else has to give', () => {
+    // `.playfield` cannot shrink and `.opponent` can, so a viewport too narrow
+    // for the pair takes it out of the opponent — which is the right way round.
+    const playfield = /\n\.playfield\s*\{([^}]*)\}/.exec(CSS)?.[1] ?? '';
+    const opponent = /\n\.opponent\s*\{([^}]*)\}/.exec(CSS)?.[1] ?? '';
+
+    expect(playfield).toContain('flex: 0 0 auto');
+    expect(opponent).toContain('flex: 0 1 auto');
+    expect(opponent).toContain('min-width: 0');
+  });
+
+  it('fits beside the player’s well on a 360x640 portrait phone', () => {
+    // The viewport the brief names. The well there is height-bound — the cap is
+    // a fraction of 640, and 360 is wide enough for a well twice as wide as the
+    // one it gets — so the opponent goes in the horizontal space that was
+    // already doing nothing, and the player's field keeps every pixel.
+    const available = 360 - 2 * px(rootValue('--page-pad'), 360, 640);
+
+    // With the on-screen pad up, which is the usual state of a phone...
+    const withPad = wellsRow(360, 640, '62dvh');
+    expect(withPad.field).toBeCloseTo(0.62 * 640, 5);
+    expect(withPad.row).toBeLessThan(available);
+
+    // ...and without it, which is the tighter of the two.
+    const noPad = wellsRow(360, 640, '72dvh');
+    expect(noPad.field).toBeCloseTo(0.72 * 640, 5);
+    expect(noPad.row).toBeLessThan(available);
+  });
+
+  it('fits on the narrowest phone the layout claims to support', () => {
+    const available = 320 - 2 * px(rootValue('--page-pad'), 320, 568);
+
+    expect(wellsRow(320, 568, '72dvh').row).toBeLessThan(available);
+  });
+
+  it('keeps both caps the fit was measured against', () => {
+    // The two numbers `wellsRow` is handed. If either moves, the arithmetic
+    // above is measuring a layout that no longer exists.
+    expect(CSS).toContain('--field-block-cap: 72dvh');
+    expect(CSS).toContain('--field-block-cap: 62dvh');
+  });
+
+  it('draws the opponent smaller than the player, and at the same proportions', () => {
+    const scale = Number(rootValue('--opponent-scale'));
+
+    expect(scale).toBeGreaterThan(0.25);
+    expect(scale).toBeLessThan(0.6);
+    // Against the well's *actual* height — `--field-height` clamped by the row
+    // it is in — rather than against what the field would like to be. On every
+    // phone those differ, and reading the wrong one drew an opponent nearly as
+    // wide as the player's well at 320px.
+    expect(CSS).toContain('calc(var(--opponent-scale) * min(var(--field-height), 100%))');
+    expect(CSS).toContain('.opponent__canvas');
+  });
+});

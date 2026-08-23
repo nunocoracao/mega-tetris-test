@@ -19,6 +19,7 @@
 
 import {
   MAX_SHARE_CHARS,
+  MODE_RULES,
   packShare,
   sharePayloadBytes,
   shareFragment,
@@ -35,7 +36,18 @@ export type ShareLink =
    * player an honest sentence and the score-only share line instead of a link
    * that a chat client would quietly cut in half.
    */
-  | { readonly ok: false; readonly reason: 'tooLong' };
+  | { readonly ok: false; readonly reason: 'tooLong' }
+  /**
+   * The run was a match, and a match cannot be put in a link.
+   *
+   * A tape is one player's keys against a seed. That is the whole of a solo run
+   * and nowhere near the whole of a versus one: the opponent's attacks landed on
+   * the player's clock at moments no tape records, so a replay built from it
+   * would show a clean well where the real run took four rows in the face. The
+   * refusal is here as well as in `decodeShare` because a link that plays back
+   * the wrong match is worse than no link, and neither end should make one.
+   */
+  | { readonly ok: false; readonly reason: 'match' };
 
 /**
  * zlib-deflate some bytes, or `null` when the platform cannot.
@@ -92,6 +104,9 @@ export async function encodeSharePayload(payload: SharePayload): Promise<string 
  * two people looking at it.
  */
 export async function buildShareLink(base: string, payload: SharePayload): Promise<ShareLink> {
+  if (MODE_RULES[payload.mode].garbage) {
+    return { ok: false, reason: 'match' };
+  }
   const encoded = await encodeSharePayload(payload);
   if (encoded === null) {
     return { ok: false, reason: 'tooLong' };

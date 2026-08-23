@@ -22,7 +22,7 @@
  * references to it.
  */
 
-import { GAME_MODES } from '../engine';
+import { BOT_DIFFICULTIES, GAME_MODES } from '../engine';
 import { CONTRAST_SETTINGS, contrastSettingLabel } from './contrast';
 import { DAILY_HISTORY_DAYS } from './daily';
 import { escapeHtml, helpBodyMarkup } from './help';
@@ -33,6 +33,8 @@ import {
   OVERLAY_ROW_KEYS,
   OVERLAY_ROW_LABELS,
   READOUT_ROW_KEYS,
+  opponentBlurb,
+  opponentLabel,
 } from './hud';
 import {
   ACTION_IDS,
@@ -49,11 +51,37 @@ import { TRY_COLUMNS, formatMs, type SettingsElements } from './settings';
 import { START_LEVELS } from './stats';
 import { THEMES, themeLabel, type ThemeId } from './theme';
 import { PAD_PREFERENCES, TOUCH_PAD_BUTTONS, padPreferenceLabel } from './touch';
+import { METER_SEGMENTS } from './versus';
 
 export interface Shell {
+  /**
+   * The row the wells live in: the incoming meter, the player's field, and —
+   * in Versus — the opponent's.
+   *
+   * `display: contents` unless a match is on, so in every other mode the
+   * playfield is a direct child of `.game__body` exactly as it always was and
+   * the layout is untouched to the pixel.
+   */
+  readonly wells: HTMLElement;
   /** Focusable wrapper around the playfield — the game's keyboard home. */
   readonly playfield: HTMLElement;
   readonly boardCanvas: HTMLCanvasElement;
+  /** The charging meter beside the well: what is queued, and how close it is. */
+  readonly garbage: HTMLElement;
+  readonly garbageCount: HTMLElement;
+  /** The meter's blocks, soonest first. Shape *and* colour, never colour alone. */
+  readonly garbageSegments: readonly HTMLElement[];
+  /** How close the soonest batch is to landing, as a bar. */
+  readonly garbageFill: HTMLElement;
+  /** The meter in words — the only part of it assistive technology reads. */
+  readonly garbageLabel: HTMLElement;
+  /** The opponent's well. Decorative: nothing here is a control. */
+  readonly opponent: HTMLElement;
+  readonly opponentCanvas: HTMLCanvasElement;
+  /** One concise sentence, rewritten only at meaningful moments. */
+  readonly opponentSummary: HTMLElement;
+  /** The name over that well — "Steady", "Quick", "Relentless". */
+  readonly opponentTag: HTMLElement;
   readonly nextCanvas: HTMLCanvasElement;
   readonly holdCanvas: HTMLCanvasElement;
   /** The well in words — the canvas's text alternative. */
@@ -77,6 +105,8 @@ export interface Shell {
   readonly overlayRows: HTMLElement;
   /** A footnote under the panel: the personal best, or which ladder applied. */
   readonly overlayNote: HTMLElement;
+  /** The match's exchange line: how many rows crossed the screen each way. */
+  readonly overlayVersus: HTMLElement;
   /** The daily challenge block: date, streak, thirty-day strip, its buttons. */
   readonly daily: HTMLElement;
   readonly dailyStatus: HTMLElement;
@@ -92,8 +122,12 @@ export interface Shell {
   /** The start screen's mode and level pickers. */
   readonly overlayStart: HTMLElement;
   readonly startLevel: HTMLSelectElement;
-  /** The three mode buttons, in the order the engine lists them. */
+  /** The mode buttons, in the order the engine lists them. */
   readonly modeButtons: readonly HTMLButtonElement[];
+  /** The opponent picker. Inside the start block, and shown only in Versus. */
+  readonly overlayOpponent: HTMLElement;
+  /** The three difficulty buttons, easiest first. */
+  readonly opponentButtons: readonly HTMLButtonElement[];
   /** The start screen's two quiet buttons: help, and settings. */
   readonly overlayMinor: HTMLElement;
   /** Opens the help panel from the start screen. */
@@ -344,6 +378,83 @@ function modesMarkup(): string {
 }
 
 /**
+ * The opponent picker.
+ *
+ * The mode picker's markup, with a different vocabulary: three real buttons in
+ * a labelled group, each carrying `aria-pressed`, each with the machine's own
+ * name and a sentence saying what actually changes. The sentence is generated
+ * from `BOT_PROFILES` — see `opponentBlurb` — because "hard" tells a player how
+ * they are expected to feel and "presses every 22 ms" tells them what they are
+ * up against.
+ */
+function opponentsMarkup(): string {
+  return BOT_DIFFICULTIES.map(
+    (difficulty) =>
+      `<button
+         type="button"
+         class="mode mode--opponent"
+         data-opponent-choice="${difficulty}"
+         aria-pressed="false"
+       ><span class="mode__name">${escapeHtml(opponentLabel(difficulty))}</span>
+        <span class="mode__blurb">${escapeHtml(opponentBlurb(difficulty))}</span></button>`,
+  ).join('');
+}
+
+/**
+ * The incoming meter: what is queued against this well, and how close it is.
+ *
+ * Three ways of saying one thing, because colour on its own says it to nobody
+ * in particular: a **numeral**, a stack of blocks whose **shape** changes as a
+ * batch charges up, and a sentence only assistive technology reads. It sits
+ * beside the well and never over it — a player who cannot see the field cannot
+ * play, and that includes a player whose field is covered by a warning about
+ * the field.
+ */
+function garbageMeterMarkup(): string {
+  const segments = Array.from(
+    { length: METER_SEGMENTS },
+    (_, index) => `<li class="meter__cell" data-garbage-cell="${index}" data-state="empty"></li>`,
+  ).join('');
+  return `
+    <div class="meter" data-garbage hidden>
+      <p class="meter__tag" aria-hidden="true">In</p>
+      <ol class="meter__stack" aria-hidden="true" data-garbage-stack>${segments}</ol>
+      <div class="meter__charge" aria-hidden="true">
+        <div class="meter__charge-fill" data-garbage-fill></div>
+      </div>
+      <p class="meter__count" aria-hidden="true" data-garbage-count>0</p>
+      <p class="visually-hidden" data-garbage-label>Nothing incoming.</p>
+    </div>
+  `;
+}
+
+/**
+ * The opponent's well.
+ *
+ * A canvas and two lines of text, and not one control: the player cannot act on
+ * this well, so nothing in it is focusable and nothing in it is announced as it
+ * happens. The name above it is for eyes only; the sentence below is the
+ * canvas's text alternative, and `src/main.ts` rewrites it at the four moments
+ * that are worth knowing about rather than sixty times a second.
+ */
+function opponentMarkup(): string {
+  return `
+    <div class="opponent" data-opponent hidden>
+      <p class="opponent__tag" aria-hidden="true" data-opponent-tag>Opponent</p>
+      <canvas
+        class="opponent__canvas"
+        data-opponent-board
+        role="img"
+        aria-labelledby="opponent-summary"
+      ></canvas>
+      <p class="visually-hidden" id="opponent-summary" data-opponent-summary>
+        Opponent well. The match has not started.
+      </p>
+    </div>
+  `;
+}
+
+/**
  * The daily challenge's block on the overlay.
  *
  * Built once and empty, like every other list on this panel: `src/main.ts`
@@ -423,11 +534,21 @@ function overlayMarkup(): string {
            paint. -->
       <p class="overlay__title" data-overlay-title>One more game.</p>
       <p class="overlay__hint" data-overlay-hint></p>
+      <!-- The match's exchange, on the result screen only: how many rows went
+           each way. Hidden in every other mode and on every other panel. -->
+      <p class="overlay__versus" data-overlay-versus hidden></p>
       <dl class="runstats" data-overlay-rows hidden>${runStatsMarkup()}</dl>
       <p class="overlay__note" data-overlay-note hidden></p>
       ${dailyMarkup()}
       <div class="overlay__start" data-overlay-start hidden>
         <div class="modes" role="group" aria-label="Game mode">${modesMarkup()}</div>
+        <div
+          class="modes modes--opponent"
+          role="group"
+          aria-label="Opponent"
+          data-overlay-opponent
+          hidden
+        >${opponentsMarkup()}</div>
         <label class="level" for="start-level">
           <span class="level__label">Start level</span>
           <select class="level__select" id="start-level" data-start-level>
@@ -941,31 +1062,43 @@ export function createShell(root: HTMLElement): Shell {
           </section>
         </div>
 
-        <div
-          class="playfield"
-          tabindex="0"
-          role="application"
-          aria-label="Playfield"
-          aria-describedby="playfield-summary"
-          data-playfield
-        >
-          <canvas
-            class="playfield__canvas"
-            data-board
-            role="img"
-            aria-labelledby="playfield-summary"
-          ></canvas>
-          <p class="countdown" data-countdown aria-hidden="true" hidden></p>
-          <!--
-            A replay must never be mistaken for a live game. This is the visible
-            half of saying so — the other halves are the tinted field frame that
-            the root data-replay attribute turns on, the bar under the well, and
-            the playfield's own label and description. The badge itself is
-            hidden from assistive technology: the bar below already says
-            "Replay" out loud, and twice would be twice.
-          -->
-          <p class="field-badge" data-replay-badge aria-hidden="true" hidden>Replay</p>
-          ${overlayMarkup()}
+        <!--
+          The wells, and what passes between them. This wrapper is
+          display: contents in every mode but Versus, so the playfield is a
+          direct child of the body grid exactly as it has always been and no
+          other layout moves by a pixel. In a match it becomes a real row: the
+          incoming meter, the player's field at full size, and the opponent's
+          beside it at a fraction of it.
+        -->
+        <div class="wells" data-wells>
+          ${garbageMeterMarkup()}
+          <div
+            class="playfield"
+            tabindex="0"
+            role="application"
+            aria-label="Playfield"
+            aria-describedby="playfield-summary"
+            data-playfield
+          >
+            <canvas
+              class="playfield__canvas"
+              data-board
+              role="img"
+              aria-labelledby="playfield-summary"
+            ></canvas>
+            <p class="countdown" data-countdown aria-hidden="true" hidden></p>
+            <!--
+              A replay must never be mistaken for a live game. This is the
+              visible half of saying so — the other halves are the tinted field
+              frame that the root data-replay attribute turns on, the bar under
+              the well, and the playfield's own label and description. The badge
+              itself is hidden from assistive technology: the bar below already
+              says "Replay" out loud, and twice would be twice.
+            -->
+            <p class="field-badge" data-replay-badge aria-hidden="true" hidden>Replay</p>
+            ${overlayMarkup()}
+          </div>
+          ${opponentMarkup()}
         </div>
 
         <div class="rail rail--end">
@@ -1042,8 +1175,20 @@ export function createShell(root: HTMLElement): Shell {
   const replay = must<HTMLElement>(root, '[data-replay]');
 
   return {
+    wells: must<HTMLElement>(root, '[data-wells]'),
     playfield: must<HTMLElement>(root, '[data-playfield]'),
     boardCanvas: must<HTMLCanvasElement>(root, '[data-board]'),
+    garbage: must<HTMLElement>(root, '[data-garbage]'),
+    garbageCount: must<HTMLElement>(root, '[data-garbage-count]'),
+    garbageSegments: Array.from({ length: METER_SEGMENTS }, (_, index) =>
+      must<HTMLElement>(root, `[data-garbage-cell="${index}"]`),
+    ),
+    garbageFill: must<HTMLElement>(root, '[data-garbage-fill]'),
+    garbageLabel: must<HTMLElement>(root, '[data-garbage-label]'),
+    opponent: must<HTMLElement>(root, '[data-opponent]'),
+    opponentCanvas: must<HTMLCanvasElement>(root, '[data-opponent-board]'),
+    opponentSummary: must<HTMLElement>(root, '[data-opponent-summary]'),
+    opponentTag: must<HTMLElement>(root, '[data-opponent-tag]'),
     nextCanvas: must<HTMLCanvasElement>(root, '[data-next]'),
     holdCanvas: must<HTMLCanvasElement>(root, '[data-hold]'),
     boardSummary: must<HTMLElement>(root, '[data-board-summary]'),
@@ -1058,6 +1203,7 @@ export function createShell(root: HTMLElement): Shell {
     overlayHint: must<HTMLElement>(root, '[data-overlay-hint]'),
     overlayRows: must<HTMLElement>(root, '[data-overlay-rows]'),
     overlayNote: must<HTMLElement>(root, '[data-overlay-note]'),
+    overlayVersus: must<HTMLElement>(root, '[data-overlay-versus]'),
     daily: must<HTMLElement>(root, '[data-daily]'),
     dailyStatus: must<HTMLElement>(root, '[data-daily-status]'),
     dailyStreak: must<HTMLElement>(root, '[data-daily-streak]'),
@@ -1072,6 +1218,10 @@ export function createShell(root: HTMLElement): Shell {
     overlayStart: must<HTMLElement>(root, '[data-overlay-start]'),
     startLevel: must<HTMLSelectElement>(root, '[data-start-level]'),
     modeButtons: GAME_MODES.map((mode) => must<HTMLButtonElement>(root, `[data-mode="${mode}"]`)),
+    overlayOpponent: must<HTMLElement>(root, '[data-overlay-opponent]'),
+    opponentButtons: BOT_DIFFICULTIES.map((difficulty) =>
+      must<HTMLButtonElement>(root, `[data-opponent-choice="${difficulty}"]`),
+    ),
     overlayMinor: must<HTMLElement>(root, '[data-overlay-minor]'),
     overlayHelp: must<HTMLButtonElement>(root, '[data-overlay-help]'),
     overlaySettings: must<HTMLButtonElement>(root, '[data-overlay-settings]'),
