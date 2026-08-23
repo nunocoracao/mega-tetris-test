@@ -210,6 +210,12 @@ export interface OverlayContent {
   readonly note: string | null;
   readonly showLevelSelect: boolean;
   readonly showHelp: boolean;
+  /**
+   * Show the daily challenge block — the date, the streak, the thirty-day strip
+   * and its buttons. True on the start screen, and at the end of a run that was
+   * itself a daily one, which is where "copy result" belongs.
+   */
+  readonly showDaily: boolean;
 }
 
 /** The things the overlay copy cannot read off the game snapshot. */
@@ -222,6 +228,16 @@ export interface OverlayView {
   readonly result?: StatsUpdate | null;
   /** The level the start screen's picker is currently set to. */
   readonly startLevel?: number;
+  /**
+   * The footnote for a run that was a daily one — where it sits in the
+   * player's own daily history, or that it was only practice.
+   *
+   * It arrives as finished copy rather than as data because the words belong to
+   * `ui/daily.ts`, which knows about streaks and standings and imports this
+   * module for its number formatting. Passing the string keeps that arrow
+   * pointing one way. `null` for an ordinary run, which is most of them.
+   */
+  readonly dailyNote?: string | null;
 }
 
 /** `'—'` rather than a zero, for a best that does not exist yet. */
@@ -375,6 +391,7 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
             : null,
         showLevelSelect: true,
         showHelp: true,
+        showDaily: true,
       };
     }
     case 'paused':
@@ -390,6 +407,7 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
         note: null,
         showLevelSelect: false,
         showHelp: false,
+        showDaily: false,
       };
     case 'over': {
       const result = view.result ?? null;
@@ -407,6 +425,7 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
         durationMs: state.elapsedMs,
       };
       const records = new Set<RecordKind>(result?.records ?? []);
+      const dailyNote = view.dailyNote ?? null;
       const eyebrow =
         result === null || records.size === 0
           ? null
@@ -422,12 +441,16 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
         hint: outcomeHint(run),
         button: 'Play again',
         rows: resultRows(run, result?.previousBest ?? null, records),
+        // A daily run's footnote wins: it is the more specific fact, and a
+        // daily is always played from level 1, so the two can never both apply.
         note:
-          result?.headStart === true
+          dailyNote ??
+          (result?.headStart === true
             ? `Started on level ${formatNumber(run.startLevel)}, so it is measured against your head-start ${MODE_LABELS[run.mode]} runs.`
-            : null,
+            : null),
         showLevelSelect: false,
         showHelp: false,
+        showDaily: dailyNote !== null,
       };
     }
     case 'playing':
@@ -839,6 +862,8 @@ export interface HudView {
   readonly result?: StatsUpdate | null;
   /** The level the start screen's picker is set to. */
   readonly startLevel?: number;
+  /** The daily footnote for the run that just ended — see `OverlayView`. */
+  readonly dailyNote?: string | null;
 }
 
 export interface Hud {
@@ -933,6 +958,9 @@ export function createHud(shell: Shell): Hud {
 
     setHidden(shell.overlayStart, !content.showLevelSelect);
     setHidden(shell.overlayHelp, !content.showHelp);
+    // The block's *contents* are written by `main.ts` when the record changes,
+    // not per frame; all the overlay decides is whether it is on screen.
+    setHidden(shell.daily, !content.showDaily);
   }
 
   /**
@@ -1019,6 +1047,7 @@ export function createHud(shell: Shell): Hud {
               stats: view.stats,
               result: view.result ?? null,
               startLevel: view.startLevel,
+              dailyNote: view.dailyNote ?? null,
             });
       if (overlay === null) {
         setHidden(shell.overlay, true);

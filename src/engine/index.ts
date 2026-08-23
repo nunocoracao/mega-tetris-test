@@ -41,6 +41,8 @@ export {
   VISIBLE_HEIGHT,
 } from './board';
 
+export { dailySeed, isDateStamp, DATE_STAMP_PATTERN } from './daily';
+
 export type { Bag, BagState, RandomFn } from './random';
 export {
   createBag,

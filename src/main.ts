@@ -19,12 +19,27 @@ import {
   GAME_MODES,
   applyInput,
   createGame,
+  dailySeed,
   update,
   type GameInput,
   type GameMode,
   type GameState,
 } from './engine';
 import { createGameAudio } from './ui/audio';
+import {
+  DAILY_MODE,
+  DAILY_START_LEVEL,
+  cellLabel,
+  dailyButtonLabel,
+  dailyRunNote,
+  dailyStanding,
+  dailyStatusLine,
+  dailyStreakLine,
+  hasPlayedOn,
+  historyCells,
+  shareText,
+  streakOn,
+} from './ui/daily';
 import { createContrastPreference, setHighContrast } from './ui/contrast';
 import { createCountdown } from './ui/countdown';
 import { createModal } from './ui/dialog';
@@ -60,6 +75,34 @@ const PREVIEW_COUNT = 3;
 function newSeed(): number {
   return Math.floor(Math.random() * 0x7fffffff) + 1;
 }
+
+/**
+ * Today, as `YYYY-MM-DD` in UTC. **The only clock read in the program.**
+ *
+ * The engine may not read one at all, and `ui/daily.ts` takes the day as an
+ * argument for the same reason: a date that arrives as a string is a date a
+ * test can name. UTC rather than local time is what makes the daily challenge
+ * *shared* — two players comparing scores are on the same day everywhere in the
+ * world, at the cost of the day turning over at an odd hour for some of them,
+ * which is the right way round for a puzzle nobody has to synchronise.
+ *
+ * Read once, at boot. A tab left open across midnight keeps the day it started
+ * with until it is reloaded, which is far kinder than swapping the seed out
+ * from under a run in progress.
+ */
+function todayStamp(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+const today = todayStamp();
+
+/**
+ * What kind of run is on the field.
+ *
+ * `daily` is today's one recorded attempt; `practice` is the same seed once the
+ * attempt is spent, which is playable as often as you like and recorded nowhere.
+ */
+type RunKind = 'free' | 'daily' | 'practice';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (root === null) {
@@ -128,22 +171,50 @@ const next = createPiecePanelRenderer(shell.nextCanvas, {
 });
 const hold = createPiecePanelRenderer(shell.holdCanvas, { slots: 1 });
 
-/** The options a fresh run is dealt with: a new sequence, the picker's answers. */
-function nextRunOptions(): { seed: number; startLevel: number; mode: GameMode } {
-  return {
-    seed: newSeed(),
-    startLevel: store.get('startLevel'),
-    mode: store.get('mode'),
-  };
+/**
+ * Which run the player is on, and which one "play again" should deal.
+ *
+ * Resolved rather than remembered: a daily attempt whose run has ended is spent,
+ * so the next press of the same button is a practice run on the same seed. The
+ * attempt is spent by the *record*, not by this variable, which is what makes a
+ * refresh mid-run free — nothing was written down.
+ */
+let runKind: RunKind = 'free';
+
+function resolveRunKind(kind: RunKind): RunKind {
+  if (kind === 'free') {
+    return 'free';
+  }
+  return hasPlayedOn(store.daily(), today) ? 'practice' : 'daily';
 }
 
-let state: GameState = createGame(nextRunOptions());
+/** The options a run of this kind is dealt with. */
+function runOptions(kind: RunKind): { seed: number; startLevel: number; mode: GameMode } {
+  if (kind === 'free') {
+    return {
+      seed: newSeed(),
+      startLevel: store.get('startLevel'),
+      mode: store.get('mode'),
+    };
+  }
+  // Level 1, Marathon, and the day's own seed. The constraint is the whole
+  // point: a score is only comparable if the run that produced it was.
+  return { seed: dailySeed(today), startLevel: DAILY_START_LEVEL, mode: DAILY_MODE };
+}
+
+let state: GameState = createGame(runOptions('free'));
 
 /**
  * What the last run did to the personal bests, or `null` before the first game
  * over of this visit. The game-over panel is written from it.
  */
 let lastResult: StatsUpdate | null = null;
+
+/**
+ * The daily footnote for the run that just ended, or `null` after an ordinary
+ * one. `ui/daily.ts` writes the words; the HUD only puts them on the panel.
+ */
+let dailyNote: string | null = null;
 
 /**
  * Set when a run has just ended, so the loop can put focus on "Play again" as
@@ -168,6 +239,7 @@ function draw(): void {
     stats: store.stats(),
     result: lastResult,
     startLevel: store.get('startLevel'),
+    dailyNote,
     // A dialog is the conversation while it is open; two "Paused" panels
     // stacked on top of each other is one too many.
     suppressOverlay: pauseMenu.isOpen() || helpPanel.isOpen(),
@@ -228,6 +300,10 @@ function setState(nextState: GameState): void {
         startLevel: state.startLevel,
         durationMs: event.durationMs,
       });
+      // And the one moment the day's attempt is spent — at the *end* of the
+      // run, never at the start of it, so a refresh, a crash or a closed laptop
+      // mid-game costs the player nothing.
+      recordDailyRun(event.score, event.lines, event.level, event.durationMs);
       focusPlayAgain = true;
     } else if (event.type === 'hold') {
       audio.play('rotate');
@@ -263,9 +339,15 @@ function startFreshGame(): void {
   // counting the player back into a game that no longer exists.
   closeMenus();
   lastResult = null;
+  dailyNote = null;
   focusPlayAgain = false;
   urgencyStep = null;
-  setState(createGame(nextRunOptions()));
+  // A daily run that is restarted — by the button, by R, or by finishing and
+  // playing again — stays on the day's seed, and becomes a practice run once
+  // the attempt has been spent. Free play deals a brand-new sequence.
+  runKind = resolveRunKind(runKind);
+  setState(createGame(runOptions(runKind)));
+  hideShareFallback();
   send({ type: 'resume' });
   draw();
   shell.playfield.focus();
@@ -535,11 +617,159 @@ shell.statsConfirmYes.addEventListener('click', () => {
   // The panel behind the menu is written from the last run, and that run's
   // comparison is now against nothing.
   lastResult = null;
+  dailyNote = null;
   renderMenuStats();
+  renderDaily();
   showResetConfirm(false);
-  hud.announce('Personal bests and totals erased.');
+  hud.announce('Personal bests, totals and daily results erased.');
   draw();
 });
+
+// -- the daily challenge ----------------------------------------------------
+
+/**
+ * The whole of the daily challenge's browser half.
+ *
+ * The rules and the words are in `ui/daily.ts`, the seed is in the engine, and
+ * the history is in the store; what is left here is what is always left here —
+ * reading the clock once, moving text into elements, and deciding policy the
+ * other layers deliberately do not have an opinion about.
+ */
+function renderDaily(): void {
+  const daily = store.daily();
+  setDailyText(shell.dailyStatus, dailyStatusLine(daily, today));
+  setDailyText(shell.dailyStreak, dailyStreakLine(daily, today));
+  shell.dailyPlay.textContent = dailyButtonLabel(daily, today);
+
+  const cells = historyCells(daily, today);
+  for (const [index, cell] of cells.entries()) {
+    const node = shell.dailyCells[index];
+    if (node === undefined) {
+      continue;
+    }
+    const label = cellLabel(cell);
+    // Two descriptions of the same cell, on purpose: the title is the tooltip a
+    // mouse gets, and the hidden span is what a screen reader reads. Neither is
+    // a colour, which is the requirement the tint alone could never meet.
+    node.title = label;
+    const text = node.querySelector<HTMLElement>('[data-daily-cell-text]');
+    if (text !== null) {
+      text.textContent = label;
+    }
+    node.dataset['played'] = cell.played ? 'yes' : 'no';
+    node.dataset['tier'] = String(cell.tier);
+    node.dataset['today'] = cell.isToday ? 'yes' : 'no';
+  }
+
+  // Nothing to copy until there is a result to copy.
+  shell.dailyCopy.hidden = !hasPlayedOn(daily, today);
+}
+
+function setDailyText(element: HTMLElement, text: string): void {
+  if (element.textContent !== text) {
+    element.textContent = text;
+  }
+}
+
+/** Put the clipboard fallback away. Called whenever the panel changes meaning. */
+function hideShareFallback(): void {
+  shell.dailyFallback.hidden = true;
+}
+
+/**
+ * Spend the day's attempt, and write the footnote the panel will show.
+ *
+ * A practice run reaches here too and is deliberately recorded nowhere: it only
+ * earns the sentence that says so, because a panel that looked identical either
+ * way would make every daily score suspect.
+ */
+function recordDailyRun(score: number, lines: number, level: number, durationMs: number): void {
+  if (runKind === 'free') {
+    dailyNote = null;
+    return;
+  }
+  if (runKind === 'practice') {
+    dailyNote = dailyRunNote({ date: today, practice: true });
+    return;
+  }
+  const daily = store.recordDaily({ date: today, score, lines, level, durationMs });
+  dailyNote = dailyRunNote({
+    date: today,
+    practice: false,
+    standing: dailyStanding(daily, today),
+    streak: streakOn(daily, today),
+  });
+  renderDaily();
+}
+
+/** Start today's daily — or a practice run on the same seed, if it is spent. */
+function startDailyRun(): void {
+  const practice = hasPlayedOn(store.daily(), today);
+  runKind = 'daily';
+  startFreshGame();
+  hud.announce(
+    practice
+      ? `Practice run on the ${today} seed. It is not recorded.`
+      : `Daily challenge for ${today}. One attempt, Marathon, level 1.`,
+  );
+}
+
+shell.dailyPlay.addEventListener('click', startDailyRun);
+
+/**
+ * Copy the day's result, with a way out when the clipboard says no.
+ *
+ * `navigator.clipboard` is missing entirely over plain HTTP and in a few
+ * embedded browsers, and `writeText` rejects when the permission is denied or
+ * the click did not look like a gesture — so the failure path is not exotic,
+ * it is Tuesday. When it fails the same text appears in a labelled, read-only
+ * field with its contents selected, which is one keystroke from the clipboard
+ * and works everywhere.
+ */
+shell.dailyCopy.addEventListener('click', () => {
+  const daily = store.daily();
+  const entry = daily.history.find((item) => item.date === today);
+  if (entry === undefined) {
+    return;
+  }
+  const text = shareText({
+    date: today,
+    score: entry.score,
+    lines: entry.lines,
+    streak: streakOn(daily, today),
+    url: shareUrl(),
+  });
+
+  // Typed as always present, and absent in real browsers over plain HTTP.
+  const clipboard: Clipboard | undefined = navigator.clipboard;
+  if (clipboard === undefined) {
+    offerManualCopy(text);
+    return;
+  }
+  void clipboard.writeText(text).then(
+    () => {
+      hideShareFallback();
+      hud.announce('Result copied to the clipboard.');
+    },
+    () => {
+      offerManualCopy(text);
+    },
+  );
+});
+
+/** The page's own address, without whatever query or hash it was opened with. */
+function shareUrl(): string {
+  const { origin, pathname } = window.location;
+  return `${origin}${pathname}`;
+}
+
+function offerManualCopy(text: string): void {
+  shell.dailyShare.value = text;
+  shell.dailyFallback.hidden = false;
+  shell.dailyShare.focus();
+  shell.dailyShare.select();
+  hud.announce('Clipboard unavailable. The result is in the box below, ready to copy.');
+}
 
 shell.pauseResume.addEventListener('click', () => pauseMenu.close());
 shell.pauseClose.addEventListener('click', () => pauseMenu.close());
@@ -801,6 +1031,7 @@ applyContrast();
 // other before the first paint, so the attract screen opens already set.
 shell.startLevel.value = String(store.get('startLevel'));
 applyMode();
+renderDaily();
 loop.start();
 draw();
 
@@ -831,5 +1062,7 @@ if (import.meta.env.DEV) {
     stats: () => store.stats(),
     settings: () => store.settings(),
     result: () => lastResult,
+    daily: () => ({ today, kind: runKind, record: store.daily(), note: dailyNote }),
+    startDaily: startDailyRun,
   });
 }

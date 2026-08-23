@@ -350,6 +350,13 @@ describe('the start screen', () => {
     expect(content?.button).toBe('Play');
     expect(content?.showLevelSelect).toBe(true);
     expect(content?.showHelp).toBe(true);
+    // The daily challenge is an entry point beside the modes, not a mode.
+    expect(content?.showDaily).toBe(true);
+  });
+
+  it('keeps the daily block off the paused veil', () => {
+    // A player mid-run does not want to be told about their streak.
+    expect(overlayContent(paused)?.showDaily).toBe(false);
   });
 
   it('says nothing about a personal best before there is one', () => {
@@ -413,6 +420,31 @@ describe('the game-over panel', () => {
     const result = applyRun(defaultStats(), run({ startLevel: 7 }));
 
     expect(overlayContent(over, { result })?.note).toContain('level 7');
+  });
+
+  it('gives a daily run its footnote and its block, and an ordinary one neither', () => {
+    // The words themselves belong to `ui/daily.ts` — see the docblock on
+    // `OverlayView.dailyNote`. What the panel decides is where they go, and
+    // that the daily block comes up with them so "copy result" is to hand.
+    const result = applyRun(defaultStats(), run());
+
+    const ordinary = overlayContent(over, { result });
+    expect(ordinary?.note).toBeNull();
+    expect(ordinary?.showDaily).toBe(false);
+
+    const daily = overlayContent(over, { result, dailyNote: 'Daily challenge, 23 August 2026.' });
+    expect(daily?.note).toBe('Daily challenge, 23 August 2026.');
+    expect(daily?.showDaily).toBe(true);
+  });
+
+  it('lets the daily footnote win over the head-start one', () => {
+    // They can never both apply — a daily is always played from level 1 — but
+    // if a stored run ever disagreed, the more specific fact is the true one.
+    const result = applyRun(defaultStats(), run({ startLevel: 7 }));
+
+    expect(overlayContent(over, { result, dailyNote: 'Practice run.' })?.note).toBe(
+      'Practice run.',
+    );
   });
 
   it('falls back to the snapshot when the run was never recorded', () => {

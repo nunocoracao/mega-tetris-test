@@ -2,7 +2,7 @@
 
 A cheerful falling-block puzzle game that lives entirely in the browser — a
 tiny arcade cabinet at a URL. No backend, no accounts, no install: three static
-files totalling **33 KB gzipped**, and you are playing.
+files totalling **36 KB gzipped**, and you are playing.
 
 **▶ [Play it](https://nunocoracao.github.io/mega-tetris-test/)**
 
@@ -20,6 +20,10 @@ browser.
 - **Three ways to play.** Marathon until you top out, Sprint for the fastest 40
   lines, Ultra for the highest score in two minutes — the same game with a
   different finish line, each with its own record book. See [Modes](#modes).
+- **A daily challenge, with no server.** Everyone who opens the page on the same
+  UTC day gets the same pieces, because the seed is a hash of the date. One
+  attempt, a streak, a thirty-day strip, and a line you can paste to a friend.
+  See [The daily challenge](#the-daily-challenge).
 - **Plays with a thumb.** Gestures over the well *and* a seven-button on-screen
   pad, both producing exactly the actions the keyboard does.
 - **Feels like something.** Line clears flash and throw shards in their own
@@ -28,7 +32,7 @@ browser.
   there is not one media file in the repository.
 - **Remembers you.** Personal bests, totals, and four settings, in one
   versioned `localStorage` key that is written on the assumption that storage
-  is hostile.
+  is hostile — plus your daily streak and the last thirty days of it.
 - **Meant to be usable.** Full keyboard operation, real modal dialogs, a
   screen-reader description of the well, a high-contrast palette, per-piece
   shape marks so nothing depends on colour alone, and `prefers-reduced-motion`
@@ -110,6 +114,55 @@ crossed it**. `update` consumes its delta in slices bounded by the finish line
 along with every other timer, so a 100 ms frame stops an Ultra on 120000 ms
 exactly, and a Sprint's clock is the clock as it stood on the fortieth line —
 not after the line-clear pause that would have followed.
+
+## The daily challenge
+
+Two facts about this project make a daily challenge free. The engine is a pure
+function of `(seed, ordered list of calls)`, so a seed *is* a run. And nothing
+here talks to a server, so there was never a scoreboard to upload to. Put those
+together and a shared calendar date is all two strangers need to play the same
+game and compare the result.
+
+**The seed is the date.** `dailySeed('2026-08-23')` in `src/engine/daily.ts` is
+FNV-1a over the `YYYY-MM-DD` string — a few lines of 32-bit arithmetic with no
+clock, no locale and no table in it. The same day gives the same pieces on every
+machine, forever; `src/engine/daily.test.ts` pins a handful of dates to their
+seeds so a refactor that quietly moved them fails the suite. The day is **UTC**,
+which is what makes it shared: everyone is on the same day at the same moment,
+at the cost of it turning over at an awkward hour for some.
+
+The engine is not allowed to read a clock (`purity.test.ts` says so), so the
+date arrives as an argument. `src/main.ts` is the one file in the project that
+asks what day it is, once, at boot — and `src/wiring.test.ts` fails if any other
+file calls `Date.now()` or `new Date()`.
+
+**One attempt a day, Marathon, from level 1.** The constraint is what makes the
+score mean anything. It is spent when the run *ends*, never when it starts, so a
+refresh, a crash or a closed laptop mid-game costs you nothing. Once it is
+spent, the same seed is still playable as a **practice run**, which is labelled
+as such on the panel and recorded nowhere.
+
+The record lives in the same versioned `localStorage` key as everything else,
+which means a determined player can obviously reset it. There is no anti-cheat
+here and there should not be: the aim is that cheating is not the *default*
+path, not that it is impossible in a program running on your own computer.
+
+**Streaks and the strip.** The current streak, the longest streak and the last
+30 days are stored; a missed day breaks the streak, and the streak is still
+alive the morning after until the day after that. It is counted at write time
+rather than derived, because a fifty-day streak does not fit in a thirty-day
+window. The strip on the start screen is 30 cells, oldest first, ending today:
+a **hollow circle** for a day missed, a **filled square** for one played, tinted
+in four bands by how the run went against your best day in the window, and every
+cell carries the date and the score in a `title` *and* in visually hidden text.
+The tint is the last thing that carries meaning, never the only one.
+
+**Copy result** puts three lines on the clipboard — the date, the score, the
+lines, the streak and the game's URL — and deliberately says nothing about the
+seed's contents, because spoiling the day for whoever reads it would defeat the
+point. `navigator.clipboard` is absent over plain HTTP and rejects when the
+permission is denied, so when it fails the same text appears in a labelled,
+read-only, pre-selected field instead.
 
 ## Controls
 
@@ -241,6 +294,9 @@ asserted.
   directions.
 - **Nothing destructive without a second answer.** Erasing your personal bests
   takes two differently-worded controls, and focus lands on the safe one.
+- **A history you can read without seeing colour.** Each of the daily strip's 30
+  cells is a hollow circle or a filled square before it is a shade, and carries
+  the date and the score as text as well as in a tooltip.
 
 ## Bundle size
 
@@ -248,12 +304,12 @@ The production build is three files and no runtime dependencies:
 
 | File         | Raw      | Gzipped     |
 | ------------ | -------- | ----------- |
-| `index.js`   | 80.6 KB  | **27.7 KB** |
-| `index.css`  | 19.9 KB  | **4.6 KB**  |
+| `index.js`   | 89.3 KB  | **30.7 KB** |
+| `index.css`  | 21.6 KB  | **4.8 KB**  |
 | `index.html` | 1.5 KB   | **0.7 KB**  |
-| **Total**    | 102.1 KB | **33.0 KB** |
+| **Total**    | 112.4 KB | **36.2 KB** |
 
-JS + CSS is **32.2 KB gzipped**, against a budget of 100 KB. There is nothing
+JS + CSS is **35.5 KB gzipped**, against a budget of 100 KB. There is nothing
 else to fetch: the favicon is an inline SVG data URI, there are no web fonts,
 no images and no audio files. Re-measure with `npm run build` — Vite prints the
 gzipped figure for every asset.
@@ -320,7 +376,8 @@ one job: `renderer.ts` paints a `GameState`, `palette.ts` reads every colour out
 of the stylesheet, `input.ts` and `touch.ts` report intents, `loop.ts` times
 frames, `shell.ts` builds the DOM, `hud.ts` writes the readouts, `dialog.ts` is
 the modal machinery, `storage.ts` is the only file that touches `localStorage`,
-and `stats.ts` is the only place a personal best is decided — including what
+`daily.ts` owns the streak arithmetic and the daily copy, and `stats.ts` is the
+only place a personal best is decided — including what
 "best" even means in a mode raced on a clock. `hud.ts` is also
 the only place a clear gets a *name* — "T-spin double", "combo ×4" — which is
 why `effects.ts` imports it for its floating labels rather than writing its own.
@@ -331,9 +388,10 @@ key presses and gestures into engine inputs, and decides policy the engine
 deliberately leaves open — whether "pause" means pause or resume, whether a
 restart replays the seed or deals a new one, what a help panel even is.
 
-Two boundaries are enforced by tests rather than by review
+Three boundaries are enforced by tests rather than by review
 (`src/wiring.test.ts`): the UI imports the engine only through its barrel
-`src/engine/index.ts`, and no file outside `ui/storage.ts` names `localStorage`.
+`src/engine/index.ts`, no file outside `ui/storage.ts` names `localStorage`, and
+no file outside `main.ts` reads the wall clock.
 
 ### One palette, in CSS
 
@@ -349,7 +407,7 @@ duplicate.
 
 ## Testing
 
-Around 680 tests, in about three seconds.
+Around 790 tests, in about four seconds.
 
 The engine carries a coverage floor because it is the part that must not rot.
 The browser layer does not, deliberately: the tests there cover the **pure**
@@ -387,8 +445,11 @@ mid-animation and hard drop into a game over; input hammered through the
 line-clear pause; a direction held into a wall for seconds; resize and
 orientation changes mid-game; backgrounding the tab; a full two-minute Ultra
 run checked to stop on 120000 ms exactly with the last ten seconds lit; a
-Sprint played to a did-not-finish; and a layout measurement at ten viewport
-sizes checking for page scroll, overlapping bands and a playable cell size.
+Sprint played to a did-not-finish; a daily attempt played out, refreshed
+mid-run to prove the attempt survives it, copied to a real clipboard *and*
+through the fallback with `navigator.clipboard` deleted; and a layout
+measurement at ten viewport sizes checking for page scroll, overlapping bands
+and a playable cell size.
 
 ## Contributing
 

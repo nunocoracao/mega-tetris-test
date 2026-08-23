@@ -12,6 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { defaultDaily, type DailyEntry } from './daily';
 import { defaultStats, emptyModeBests, type Best, type RunSummary, type Stats } from './stats';
 import {
   LEGACY_KEYS,
@@ -101,6 +102,45 @@ function version2(overrides: Record<string, unknown> = {}): Record<string, unkno
   };
 }
 
+/** A version-3 store, as the build before the daily challenge wrote one. */
+function version3(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    version: 3,
+    settings: {
+      sound: false,
+      motion: 'reduced',
+      contrast: 'more',
+      pad: 'off',
+      seenHelp: true,
+      startLevel: 4,
+      mode: 'sprint',
+    },
+    stats: {
+      modes: {
+        marathon: {
+          base: { score: 12_345, level: 9, lines: 88, durationMs: 400_000 },
+          headStart: { score: 6_000, level: 14, lines: 40, durationMs: 120_000 },
+        },
+        sprint: {
+          base: { score: 900, level: 5, lines: 40, durationMs: 102_000 },
+          headStart: { score: 0, level: 0, lines: 0, durationMs: 0 },
+        },
+        ultra: {
+          base: { score: 8_400, level: 6, lines: 52, durationMs: 120_000 },
+          headStart: { score: 0, level: 0, lines: 0, durationMs: 0 },
+        },
+      },
+      gamesPlayed: 37,
+      totalLines: 512,
+    },
+    ...overrides,
+  };
+}
+
+function dailyEntry(overrides: Partial<DailyEntry> = {}): DailyEntry {
+  return { date: '2026-08-23', score: 4_200, lines: 12, level: 3, durationMs: 61_000, ...overrides };
+}
+
 // ---------------------------------------------------------------------------
 
 describe('a store with nowhere to keep anything', () => {
@@ -177,6 +217,7 @@ describe('a store over a corrupt value', () => {
       version: SCHEMA_VERSION,
       settings: defaultSettings(),
       stats: defaultStats(),
+      daily: defaultDaily(),
     });
   });
 });
@@ -245,6 +286,7 @@ describe('migration', () => {
       version: SCHEMA_VERSION,
       settings: defaultSettings(),
       stats: defaultStats(),
+      daily: defaultDaily(),
     };
 
     expect(migrate(current)).toEqual(current);
@@ -320,6 +362,48 @@ describe('migration', () => {
     // And it is rewritten in the current shape, so the next load has no work.
     expect(JSON.parse(area.map.get(STORAGE_KEY) as string).version).toBe(SCHEMA_VERSION);
     expect(marathonBest(createStore({ area }).stats()).score).toBe(12_345);
+  });
+
+  it('carries a version 3 store forward and gives it an empty daily record', () => {
+    // The build before the daily challenge. Nobody who used it has a streak,
+    // because there was nothing to keep one of — but every best it holds,
+    // across all three modes and both ladders, has to survive the step.
+    const migrated = migrate(version3());
+
+    expect(migrated.version).toBe(SCHEMA_VERSION);
+    expect(migrated.daily).toEqual(defaultDaily());
+    expect(migrated.stats.modes.marathon.base.score).toBe(12_345);
+    expect(migrated.stats.modes.marathon.headStart.score).toBe(6_000);
+    expect(migrated.stats.modes.sprint.base.durationMs).toBe(102_000);
+    expect(migrated.stats.modes.ultra.base.score).toBe(8_400);
+    expect(migrated.stats.gamesPlayed).toBe(37);
+    expect(migrated.stats.totalLines).toBe(512);
+    expect(migrated.settings.mode).toBe('sprint');
+    expect(migrated.settings.startLevel).toBe(4);
+  });
+
+  it('loads a version 3 store through `createStore` and can record a daily on top', () => {
+    const area = memoryArea({ [STORAGE_KEY]: JSON.stringify(version3()) });
+
+    const store = createStore({ area });
+    store.recordDaily(dailyEntry());
+
+    expect(marathonBest(store.stats()).score).toBe(12_345);
+    expect(store.daily().currentStreak).toBe(1);
+    // And it is rewritten in the current shape, so the next load has no work.
+    expect(JSON.parse(area.map.get(STORAGE_KEY) as string).version).toBe(SCHEMA_VERSION);
+    expect(createStore({ area }).daily().history).toEqual([dailyEntry()]);
+  });
+
+  it('walks a version 1 store all the way to the daily era in one go', () => {
+    // Three steps in the table, run back to back. The oldest store there is
+    // still has to arrive as something this build can read.
+    const migrated = migrate({ version: 1, settings: { pad: 'on' } });
+
+    expect(migrated.version).toBe(SCHEMA_VERSION);
+    expect(migrated.settings.pad).toBe('on');
+    expect(migrated.stats).toEqual(defaultStats());
+    expect(migrated.daily).toEqual(defaultDaily());
   });
 
   it('treats a missing version as the oldest one we know how to read', () => {
@@ -483,5 +567,73 @@ describe('writing', () => {
     expect(() => store.set('sound', false)).not.toThrow();
     // The in-memory copy is still authoritative for this session.
     expect(store.get('sound')).toBe(false);
+  });
+});
+
+describe('the daily record', () => {
+  it('starts empty and survives a round trip', () => {
+    const area = memoryArea();
+
+    createStore({ area }).recordDaily(dailyEntry());
+
+    const reloaded = createStore({ area });
+    expect(reloaded.daily().history).toEqual([dailyEntry()]);
+    expect(reloaded.daily().currentStreak).toBe(1);
+    expect(reloaded.daily().longestStreak).toBe(1);
+  });
+
+  it('spends the day once — a second run on the same date changes nothing', () => {
+    const store = createStore({ area: memoryArea() });
+    store.recordDaily(dailyEntry({ score: 4_200 }));
+
+    store.recordDaily(dailyEntry({ score: 99_999 }));
+
+    expect(store.daily().history).toEqual([dailyEntry({ score: 4_200 })]);
+    expect(store.daily().currentStreak).toBe(1);
+  });
+
+  it('is erased along with the bests, because a surviving streak would be a lie', () => {
+    const store = createStore({ area: memoryArea() });
+    store.recordRun(run());
+    store.recordDaily(dailyEntry());
+
+    store.resetStats();
+
+    expect(store.daily()).toEqual(defaultDaily());
+    expect(store.stats()).toEqual(defaultStats());
+  });
+
+  it('keeps working over storage that throws', () => {
+    const store = createStore({ area: throwingArea() });
+
+    expect(() => store.recordDaily(dailyEntry())).not.toThrow();
+    expect(store.daily().currentStreak).toBe(1);
+  });
+
+  it('repairs a hand-edited history rather than trusting it', () => {
+    const area = memoryArea({
+      [STORAGE_KEY]: JSON.stringify({
+        version: SCHEMA_VERSION,
+        settings: defaultSettings(),
+        stats: defaultStats(),
+        daily: {
+          history: [
+            { date: '2026-08-24', score: 10, lines: 1, level: 1, durationMs: 10 },
+            { date: 'yesterday', score: 999 },
+            { date: '2026-08-23', score: 20, lines: 2, level: 1, durationMs: 20 },
+            { date: '2026-02-31', score: 999 },
+          ],
+          currentStreak: 4,
+          longestStreak: 1,
+        },
+      }),
+    });
+
+    const daily = createStore({ area }).daily();
+
+    // Sorted, with the two impossible dates dropped — and a longest streak
+    // shorter than the current one raised rather than kept.
+    expect(daily.history.map((entry) => entry.date)).toEqual(['2026-08-23', '2026-08-24']);
+    expect(daily.longestStreak).toBe(4);
   });
 });

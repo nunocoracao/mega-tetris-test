@@ -86,6 +86,43 @@ describe('the engine boundary', () => {
   });
 });
 
+describe('the calendar boundary', () => {
+  /**
+   * **Only `main.ts` may ask what day it is.**
+   *
+   * The daily challenge turns on a date, and a date that is *fetched* where it
+   * is used is a date no test can pin: the seed function, the streak arithmetic
+   * and the history strip would all quietly mean something different at
+   * midnight, in another timezone, or on a machine with a wrong clock. So the
+   * clock is read once, at the composition root, and handed down as a string.
+   *
+   * This forbids the two calls that read the wall clock. `Date.UTC` and
+   * `new Date(ms)` are deliberately still allowed — they are arithmetic on an
+   * argument, which is exactly what `ui/daily.ts` uses them for.
+   */
+  const CLOCK_READS: readonly { readonly pattern: RegExp; readonly what: string }[] = [
+    { pattern: /\bDate\.now\s*\(/, what: 'Date.now()' },
+    { pattern: /\bnew Date\s*\(\s*\)/, what: 'new Date()' },
+  ];
+
+  const others = sources(SRC_DIR).filter((name) => name !== 'main.ts');
+
+  it.each(others)('%s does not read the clock', (name) => {
+    const code = stripComments(readFileSync(join(SRC_DIR, name), 'utf8'));
+    for (const { pattern, what } of CLOCK_READS) {
+      expect(pattern.test(code), `${name} reads the clock with ${what}`).toBe(false);
+    }
+  });
+
+  it('reads it exactly once, in the composition root', () => {
+    const code = stripComments(MAIN);
+    const reads = [...code.matchAll(/\bnew Date\s*\(\s*\)/g)];
+
+    expect(reads).toHaveLength(1);
+    expect(code).toContain('function todayStamp()');
+  });
+});
+
 describe('the storage boundary', () => {
   // `ui/storage.ts` is the only file allowed to touch `localStorage`, which is
   // what keeps the "storage may be hostile" handling — and the stored format —
