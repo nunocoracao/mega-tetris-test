@@ -54,6 +54,7 @@ import {
 } from './input';
 import type { MotionSetting } from './motion';
 import type { SettingAccess } from './storage';
+import type { ThemeId } from './theme';
 import type { PadPreference } from './touch';
 
 /** How many columns the try-it strip is wide. */
@@ -81,6 +82,8 @@ export interface SettingsElements {
   readonly soundInput: HTMLInputElement;
   readonly motionInputs: readonly HTMLInputElement[];
   readonly contrastInputs: readonly HTMLInputElement[];
+  /** The skin picker: one radio per theme, each with its own swatch. */
+  readonly themeInputs: readonly HTMLInputElement[];
   readonly padInputs: readonly HTMLInputElement[];
   readonly handlingInputs: readonly HTMLInputElement[];
   readonly handlingValues: readonly HTMLElement[];
@@ -103,6 +106,7 @@ export interface SettingsPanelOptions {
   readonly sound: SettingAccess<boolean>;
   readonly motion: SettingAccess<MotionSetting>;
   readonly contrast: SettingAccess<ContrastSetting>;
+  readonly theme: SettingAccess<ThemeId>;
   readonly pad: SettingAccess<PadPreference>;
   /** Through the game's one live region. */
   readonly announce: (message: string) => void;
@@ -234,6 +238,7 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
     const chosen: readonly [readonly HTMLInputElement[], string][] = [
       [elements.motionInputs, options.motion.read()],
       [elements.contrastInputs, options.contrast.read()],
+      [elements.themeInputs, options.theme.read()],
       [elements.padInputs, options.pad.read()],
     ];
     for (const [inputs, value] of chosen) {
@@ -443,6 +448,7 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
 
   const onMotionChange = choiceListener(options.motion);
   const onContrastChange = choiceListener(options.contrast);
+  const onThemeChange = choiceListener(options.theme);
   const onPadChange = choiceListener(options.pad);
 
   // -- the try-it strip -----------------------------------------------------
@@ -558,6 +564,9 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
   for (const input of elements.contrastInputs) {
     input.addEventListener('change', onContrastChange);
   }
+  for (const input of elements.themeInputs) {
+    input.addEventListener('change', onThemeChange);
+  }
   for (const input of elements.padInputs) {
     input.addEventListener('change', onPadChange);
   }
@@ -622,6 +631,9 @@ export function createSettingsPanel(options: SettingsPanelOptions): SettingsPane
       }
       for (const input of elements.contrastInputs) {
         input.removeEventListener('change', onContrastChange);
+      }
+      for (const input of elements.themeInputs) {
+        input.removeEventListener('change', onThemeChange);
       }
       for (const input of elements.padInputs) {
         input.removeEventListener('change', onPadChange);

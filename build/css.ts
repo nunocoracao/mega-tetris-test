@@ -30,15 +30,27 @@ export function readIndexHtml(): string {
 }
 
 /**
- * The custom properties of the *first* `:root` block — the base palette, not
- * the `prefers-contrast` overrides that follow it. Same slice
- * `ui/palette.test.ts` takes, and for the same reason: the default palette is
- * the one an icon and a splash screen are painted in.
+ * Where the default palette starts.
+ *
+ * The block is found by its *second* selector, which appears exactly once in
+ * the sheet. `:root {` stopped identifying it when the palette and the geometry
+ * were split into two root blocks and three more skins arrived below them —
+ * and, worse, would have quietly matched the geometry block instead of failing.
+ */
+const DEFAULT_PALETTE_ANCHOR = ".swatch[data-theme='midnight'] {";
+
+/**
+ * The custom properties of the *default* palette block — Midnight, not the
+ * skins beneath it and not the `prefers-contrast` overrides. Same slice
+ * `ui/palette.test.ts` takes, and for the same reason: the installed app's icon
+ * set, splash screen and manifest colours stay on the default palette however
+ * the player has dressed the cabinet, because an icon that changes with a
+ * preference is worse than one that does not.
  */
 export function rootProperties(css: string = readStylesheet()): ReadonlyMap<string, string> {
-  const start = css.indexOf(':root {');
+  const start = css.indexOf(DEFAULT_PALETTE_ANCHOR);
   if (start < 0) {
-    throw new Error('style.css has no `:root` block.');
+    throw new Error('style.css has no default palette block.');
   }
   const end = css.indexOf('\n}', start);
   // Comments can carry colons and semicolons; strip them before parsing.

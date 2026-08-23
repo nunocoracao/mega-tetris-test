@@ -20,9 +20,17 @@ import { GAME_OVER_ROW_MS } from './effects';
 
 const CSS = readFileSync(fileURLToPath(new URL('../style.css', import.meta.url)), 'utf8');
 
-/** The value of a custom property in the first `:root` block. */
+/**
+ * The value of a custom property in the geometry block.
+ *
+ * That block is the one whose selector is a bare `:root` on its own line — the
+ * palette blocks above and below it all carry a second selector or an
+ * attribute, and the header comment mentions `:root` in prose.
+ */
+const GEOMETRY = '\n:root {';
+
 function rootValue(name: string): string {
-  const root = CSS.slice(CSS.indexOf(':root'), CSS.indexOf('}', CSS.indexOf(':root')));
+  const root = CSS.slice(CSS.indexOf(GEOMETRY), CSS.indexOf('\n}', CSS.indexOf(GEOMETRY)));
   const match = new RegExp(`${name}\\s*:\\s*([^;]+);`).exec(root);
   expect(match, `stylesheet has no ${name} in :root`).not.toBeNull();
   return (match?.[1] ?? '').trim();

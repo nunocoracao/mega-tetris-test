@@ -58,6 +58,7 @@ import {
   type Stats,
   type StatsUpdate,
 } from './stats';
+import { DEFAULT_THEME, parseTheme, type ThemeId } from './theme';
 import { parsePadPreference, type PadPreference } from './touch';
 
 // ---------------------------------------------------------------------------
@@ -72,7 +73,7 @@ export const STORAGE_KEY = 'mega-tetris:store';
  * that gets the previous version here — a store written by an older build must
  * keep working, and a player's high score is not something to shrug about.
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 /** Everything a player can set, as one object. */
 export interface Settings {
@@ -80,6 +81,11 @@ export interface Settings {
   readonly sound: boolean;
   readonly motion: MotionSetting;
   readonly contrast: ContrastSetting;
+  /**
+   * Which cabinet the game is painted in. Presentation only — the engine has
+   * never heard of it, and a replay recorded on one skin plays back on any.
+   */
+  readonly theme: ThemeId;
   /** Visibility of the on-screen control pad. */
   readonly pad: PadPreference;
   /** The help panel has been shown at least once, so it stops opening itself. */
@@ -118,6 +124,7 @@ export function defaultSettings(): Settings {
     sound: true,
     motion: 'auto',
     contrast: 'auto',
+    theme: DEFAULT_THEME,
     pad: 'auto',
     seenHelp: false,
     startLevel: 1,
@@ -170,6 +177,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     contrast: parseContrastSetting(
       typeof source['contrast'] === 'string' ? source['contrast'] : null,
     ),
+    theme: parseTheme(typeof source['theme'] === 'string' ? source['theme'] : null),
     pad: parsePadPreference(typeof source['pad'] === 'string' ? source['pad'] : null),
     seenHelp: flag(source['seenHelp'], defaults.seenHelp),
     startLevel:
@@ -237,6 +245,12 @@ const MIGRATIONS: Readonly<
   // default handling, which is exactly what the sanitiser's defaults say. The
   // step exists because the table must have no gaps.
   5: (data) => data,
+
+  // 6 → 7: the cabinet got more than one dress. A version-6 store is a
+  // version-7 store wearing Midnight, which is what the sanitiser's default
+  // says — so, once again, nothing moves and the step is here to keep the
+  // table gapless.
+  6: (data) => data,
 };
 
 /** The oldest version we know how to read. Anything older is treated as this. */

@@ -1,3 +1,13 @@
+/**
+ * The contrast setting, and the cue that survives it.
+ *
+ * The colour half of high contrast is measured in `style.test.ts`, against the
+ * stylesheet, for every skin. What is here is the other half: the decision
+ * table, and the per-piece marks — which exist precisely because a palette,
+ * however carefully checked, can never be the *only* thing telling two blocks
+ * apart.
+ */
+
 import { describe, expect, it } from 'vitest';
 
 import { PIECE_KINDS } from '../engine';
@@ -13,6 +23,7 @@ import {
   parseContrastSetting,
   setHighContrast,
 } from './contrast';
+import { THEME_IDS } from './theme';
 
 describe('parseContrastSetting', () => {
   it('accepts the three settings and nothing else', () => {
@@ -79,5 +90,29 @@ describe('piece marks', () => {
   it('keeps the mirrored pairs mirrored', () => {
     expect(blockMark('S')).toBe('slashUp');
     expect(blockMark('Z')).toBe('slashDown');
+  });
+
+  it('is the same seven marks under every skin, in every contrast mode', () => {
+    // The marks are deliberately *not* a function of the palette. Four skins
+    // times three settings is twelve different sets of seven colours, and the
+    // shape stamped into each kind is the one thing that does not move across
+    // any of them — which is what makes it something a player can learn once.
+    //
+    // If a skin ever wanted its own marks, this is the test that would have to
+    // change, and the reason it should not: a cue that varies is not a cue.
+    for (const theme of THEME_IDS) {
+      for (const setting of CONTRAST_SETTINGS) {
+        for (const systemMore of [false, true]) {
+          setHighContrast(isHighContrast(setting, systemMore));
+          const marks = allMarks();
+
+          expect(marks, `${theme} in ${setting} contrast lost a mark`).toEqual(
+            PIECE_KINDS.map((kind) => PIECE_MARK[kind]),
+          );
+          expect(new Set(marks).size).toBe(PIECE_KINDS.length);
+        }
+      }
+    }
+    setHighContrast(false);
   });
 });

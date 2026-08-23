@@ -55,11 +55,11 @@ describe('the composition root', () => {
   });
 
   it('reads the settings that other modules own through `access`', () => {
-    // These four modules keep their own copy of a preference and need a way to
+    // These five modules keep their own copy of a preference and need a way to
     // persist it. Handing them the whole store would put a second writer on the
     // format; handing them one accessor each is the arrangement that keeps
     // `storage.ts` the only file that knows the shape.
-    for (const key of ['motion', 'contrast', 'sound', 'pad']) {
+    for (const key of ['motion', 'contrast', 'theme', 'sound', 'pad']) {
       expect(MAIN).toContain(`store.access('${key}')`);
     }
   });
@@ -272,6 +272,70 @@ describe('the bindings boundary', () => {
     expect(code).toContain('createLiveBindings(');
     expect(/createKeyboardInput\(\{[^}]*bindings:/s.test(code)).toBe(true);
     expect(/createKeyboardInput\(\{[^}]*handling:/s.test(code)).toBe(true);
+  });
+});
+
+describe('the colour boundary', () => {
+  /**
+   * **`ui/palette.ts` is the only browser file that writes a colour down.**
+   *
+   * This is what makes a new skin a stylesheet edit. Every colour the canvas
+   * paints — blocks, ghost, grid, veil, particles, score popups — is read back
+   * out of the custom properties through `getPalette()`, so switching
+   * `data-theme` and re-reading is the whole of "the canvas follows". One
+   * hard-coded hex in the renderer would be one thing on the field that stayed
+   * plum in a daylight cabinet, and nothing would fail but the look of it.
+   *
+   * The constants in `palette.ts` are the exception, and are pinned against the
+   * stylesheet by `palette.test.ts` — they are a pre-first-paint fallback, not
+   * a second palette.
+   */
+  const COLOUR_LITERAL = /#[0-9a-fA-F]{3,8}\b|\brgba?\(/;
+
+  const others = sources(SRC_DIR).filter((name) => name !== 'ui/palette.ts');
+
+  it.each(others)('%s writes no colour of its own', (name) => {
+    const code = stripComments(readFileSync(join(SRC_DIR, name), 'utf8'));
+    const found = [...code.matchAll(new RegExp(COLOUR_LITERAL, 'g'))].map((match) => match[0]);
+
+    expect(found, `${name} paints a colour the stylesheet does not own`).toEqual([]);
+  });
+
+  it('keeps the skin out of the engine entirely', () => {
+    // Colour is presentation. The engine has never heard of a theme, which is
+    // why `REPLAY_FORMAT_VERSION` does not move when a skin is added — a run
+    // recorded on Lagoon replays identically on Midnight.
+    for (const name of sources(SRC_DIR).filter((file) => file.startsWith('engine/'))) {
+      const code = stripComments(readFileSync(join(SRC_DIR, name), 'utf8'));
+
+      expect(/\btheme\b/i.test(code), `${name} mentions a theme`).toBe(false);
+    }
+  });
+
+  it('re-reads the palette after it moves the root attribute, never before', () => {
+    // The attribute is what swaps the CSS palette, so a `refreshPalette` that
+    // ran first would hand the canvas the *previous* skin and leave the blocks
+    // a repaint behind the chrome. Both `applyTheme` and `applyContrast` are
+    // written in that order, and the status bar follows both.
+    const code = stripComments(MAIN);
+    for (const apply of ['applyTheme', 'applyContrast']) {
+      const body = code.slice(code.indexOf(`function ${apply}()`));
+      const end = body.indexOf('\n}');
+      const fn = body.slice(0, end);
+
+      expect(fn, `${apply} does not re-read the palette`).toContain('refreshPalette()');
+      expect(fn, `${apply} does not follow with the status bar`).toContain('syncThemeColor()');
+      expect(fn.indexOf('dataset')).toBeLessThan(fn.indexOf('refreshPalette()'));
+      expect(fn.indexOf('refreshPalette()')).toBeLessThan(fn.indexOf('syncThemeColor()'));
+    }
+  });
+
+  it('leaves the default skin as the absence of an attribute', () => {
+    // Everything that says "nothing regresses if `data-theme` is missing" rests
+    // on `applyTheme` removing it rather than writing 'midnight'.
+    const code = stripComments(MAIN);
+
+    expect(code).toContain("delete document.documentElement.dataset['theme']");
   });
 });
 

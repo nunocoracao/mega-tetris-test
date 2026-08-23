@@ -27,6 +27,7 @@ import {
   sanitizeSettings,
   type StorageArea,
 } from './storage';
+import { DEFAULT_THEME } from './theme';
 
 // ---------------------------------------------------------------------------
 // Fake storage areas
@@ -246,6 +247,7 @@ describe('round tripping', () => {
       startLevel: 6,
       mode: 'sprint',
       installDismissed: false,
+      theme: DEFAULT_THEME,
       bindings: defaultKeyMap(),
       handling: DEFAULT_HANDLING,
     });
@@ -312,6 +314,7 @@ describe('migration', () => {
       startLevel: 1,
       mode: 'marathon',
       installDismissed: false,
+      theme: DEFAULT_THEME,
       bindings: defaultKeyMap(),
       handling: DEFAULT_HANDLING,
     });
@@ -356,6 +359,7 @@ describe('migration', () => {
       startLevel: 4,
       mode: 'marathon',
       installDismissed: false,
+      theme: DEFAULT_THEME,
       bindings: defaultKeyMap(),
       handling: DEFAULT_HANDLING,
     });
@@ -438,6 +442,42 @@ describe('migration', () => {
     expect(migrated.settings.installDismissed).toBe(true);
     expect(migrated.settings.mode).toBe('sprint');
     expect(migrated.stats.modes.marathon.base.score).toBe(12_345);
+  });
+
+  it('carries a version 6 store forward wearing the default skin', () => {
+    // The build before the cabinet had more than one dress. Nothing moves:
+    // everybody who played version 6 was looking at Midnight, which is exactly
+    // what the sanitiser's default says — and every number they set comes with
+    // them. The step exists so the table stays gapless.
+    const migrated = migrate({
+      ...version3(),
+      version: 6,
+      daily: defaultDaily(),
+      settings: {
+        ...(version3()['settings'] as object),
+        bindings: { ...defaultKeyMap(), hardDrop: ['Q'] },
+      },
+    });
+
+    expect(migrated.version).toBe(SCHEMA_VERSION);
+    expect(migrated.settings.theme).toBe(DEFAULT_THEME);
+    expect(migrated.settings.bindings.hardDrop).toEqual(['Q']);
+    expect(migrated.settings.mode).toBe('sprint');
+    expect(migrated.stats.modes.marathon.base.score).toBe(12_345);
+  });
+
+  it('keeps a stored skin, and falls back to the default for anything else', () => {
+    expect(migrate({ version: SCHEMA_VERSION, settings: { theme: 'lagoon' } }).settings.theme).toBe(
+      'lagoon',
+    );
+    // Corrupt, from a skin that has been retired, from a future build, or the
+    // wrong type entirely: all of them are Midnight, and none of them throws.
+    for (const junk of ['MIDNIGHT', 'chartreuse', '', null, 7, {}, ['lagoon']]) {
+      expect(
+        migrate({ version: SCHEMA_VERSION, settings: { theme: junk } }).settings.theme,
+        `theme ${JSON.stringify(junk)} should fall back`,
+      ).toBe(DEFAULT_THEME);
+    }
   });
 
   it('keeps a customised set of controls when a newer store is read back', () => {
@@ -541,6 +581,7 @@ describe('the loose keys of the ad-hoc era', () => {
       startLevel: 1,
       mode: 'marathon',
       installDismissed: false,
+      theme: DEFAULT_THEME,
       bindings: defaultKeyMap(),
       handling: DEFAULT_HANDLING,
     });

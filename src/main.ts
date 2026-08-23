@@ -70,6 +70,7 @@ import { createSettingsPanel } from './ui/settings';
 import { applyBindings, createShell } from './ui/shell';
 import { clampStartLevel, type StatsUpdate } from './ui/stats';
 import { createStore } from './ui/storage';
+import { DEFAULT_THEME, createThemePreference, themeAnnouncement } from './ui/theme';
 import { createHaptics, createTouchControls } from './ui/touch';
 
 /** How many upcoming pieces the preview shows. */
@@ -174,6 +175,22 @@ const contrast = createContrastPreference({
   storage: store.access('contrast'),
   onChange: () => {
     applyContrast();
+    draw();
+  },
+});
+
+/**
+ * Which skin the cabinet is wearing.
+ *
+ * Presentation and nothing else: the stylesheet holds four complete palettes
+ * and this only decides which of them the root element selects. The canvas
+ * follows for free, because every colour it paints is read back out of the same
+ * custom properties — see `applyTheme`.
+ */
+const theme = createThemePreference({
+  storage: store.access('theme'),
+  onChange: () => {
+    applyTheme();
     draw();
   },
 });
@@ -739,6 +756,15 @@ const settingsPanel = createSettingsPanel({
       draw();
     },
   },
+  theme: {
+    read: () => theme.theme(),
+    // No `applyTheme` here, unlike the three above: a skin has no system
+    // preference folded into it, so the setting *is* the answer and `set`
+    // repaints through its own `onChange`. What is left is the sentence — the
+    // radio group announces which option is chosen, and this says what that
+    // skin actually looks like, through the game's one live region.
+    write: (id) => hud.announce(themeAnnouncement(theme.set(id))),
+  },
   pad: {
     read: () => touch.preference(),
     write: (preference) => touch.setPreference(preference),
@@ -824,12 +850,14 @@ function resetAllSettings(): void {
   audio.setSound(defaults.sound);
   motion.set(defaults.motion);
   contrast.set(defaults.contrast);
+  theme.set(defaults.theme);
   touch.setPreference(defaults.pad);
   bindings.setKeyMap(defaults.bindings);
   bindings.setHandling(defaults.handling);
   applySound();
   applyMotion();
   applyContrast();
+  applyTheme();
   effects.clear();
   // The start screen's two pickers are settings as well, and both are markup
   // that has to be told what the store now says.
@@ -1448,6 +1476,32 @@ function applyContrast(): void {
       : `Contrast forced to ${contrast.label().toLowerCase()}. Tap to change.`;
 }
 
+/**
+ * Publish the chosen skin to the stylesheet, and follow it everywhere.
+ *
+ * Same order as `applyContrast`, and for the same reason: the root attribute is
+ * what swaps the CSS palette, so the custom properties have to be re-read
+ * *afterwards* or the canvas would keep painting the old skin. Nothing in the
+ * renderer, the particles or the score popups knows a theme exists — they ask
+ * `getPalette()`, and this is what changes the answer.
+ *
+ * The default skin is the *absence* of the attribute rather than a value of it,
+ * so a document that never runs this — or runs it before the script that would
+ * have set something else — is dressed exactly as the game has always shipped.
+ */
+function applyTheme(): void {
+  const id = theme.theme();
+  if (id === DEFAULT_THEME) {
+    delete document.documentElement.dataset['theme'];
+  } else {
+    document.documentElement.dataset['theme'] = id;
+  }
+  refreshPalette();
+  // Installed, this is the colour of the system chrome around the game. A skin
+  // that stopped at the edge of the page would leave a seam across the top.
+  syncThemeColor();
+}
+
 shell.motionToggle.addEventListener('click', () => {
   const setting = motion.cycle();
   applyMotion();
@@ -1678,6 +1732,7 @@ applyBindings(shell, bindings.table());
 applyMotion();
 applySound();
 applyContrast();
+applyTheme();
 // The pickers are markup; the remembered choices are data. Publish one into the
 // other before the first paint, so the attract screen opens already set.
 shell.startLevel.value = String(store.get('startLevel'));

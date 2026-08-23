@@ -3,11 +3,13 @@
  *
  * The idea: a tiny arcade cabinet that happens to live in a browser tab. A
  * warm, deep-plum interior lit from above, a bezelled well with a soft violet
- * glow, and seven cheerful block colours that stay readable against it.
+ * glow, and seven cheerful block colours that stay readable against it. That is
+ * Midnight, the cabinet's default dress; three more skins follow it below.
  *
- * The `:root` block below is the *only* place a colour is written down. The
+ * The palette blocks below are the *only* place a colour is written down. The
  * canvas renderer reads the same custom properties back out through
- * `ui/palette.ts`, so the blocks and the chrome cannot drift apart.
+ * `ui/palette.ts`, so the blocks and the chrome cannot drift apart — which is
+ * also why a new skin needs no renderer change at all.
  *
  * Sizing is deliberately formula-driven rather than breakpoint-driven: the
  * playfield is the smaller of "what the viewport height allows" and "what the
@@ -16,7 +18,24 @@
  * above and below it; everything else follows from the formula.
  */
 
-:root {
+/*
+ * ------------------------------------------------------------- Midnight -----
+ *
+ * The default skin, and the one every other skin is measured against. It lives
+ * on bare `:root` so a document with no `data-theme` attribute at all — before
+ * the script has run, or if it never does — is dressed exactly as it always was.
+ *
+ * The second selector is the theme picker's swatch. A chip has to show a skin
+ * that is *not* the active one, and the only honest way to do that is to let the
+ * same declarations apply inside the chip; every skin below carries the same
+ * pair, so the picker can never show a colour the cabinet would not.
+ *
+ * Every skin declares this exact set of properties and nothing else —
+ * `ui/style.test.ts` fails the build if one is missing, because a missing
+ * property silently inherits Midnight's and produces a half-dressed cabinet.
+ */
+:root,
+.swatch[data-theme='midnight'] {
   color-scheme: dark;
 
   /* ------------------------------------------------------- the cabinet -- */
@@ -77,7 +96,15 @@
   --piece-z: #ff5d73; /* coral     */
   --piece-j: #5b8cff; /* cobalt    */
   --piece-l: #ff9f1c; /* tangerine */
+}
 
+/*
+ * Everything that is *not* a colour: geometry, type, and the two structural
+ * knobs high contrast turns. None of it is themeable — a skin changes what the
+ * cabinet is painted, never how big it is — so it stays on bare `:root` and is
+ * written exactly once.
+ */
+:root {
   /* --------------------------------------------------------- geometry --- */
 
   /*
@@ -162,6 +189,7 @@
     --well-deep: #05030a;
     --field-frame: #c3b0e0;
     --field-bezel: #150e20;
+    --grid-line: #ffffff;
     --veil: #05030a;
     --overlay-veil: rgb(3 1 6 / 0.92);
     --edge: #c3b0e0;
@@ -198,6 +226,7 @@
   --well-deep: #05030a;
   --field-frame: #c3b0e0;
   --field-bezel: #150e20;
+  --grid-line: #ffffff;
   --veil: #05030a;
   --overlay-veil: rgb(3 1 6 / 0.92);
   --edge: #c3b0e0;
@@ -216,6 +245,270 @@
   --piece-z: #ff92a3;
   --piece-j: #93b4ff;
   --piece-l: #ffbe5c;
+
+  --control-border-width: 2px;
+  --title-fill: var(--accent);
+}
+
+/*
+ * ================================================================ skins =====
+ *
+ * Three more cabinets, each with a point of view rather than a hue rotation.
+ * `ui/theme.ts` names them; `src/main.ts` puts the chosen one on the root as
+ * `data-theme`, and leaves the attribute off entirely for Midnight.
+ *
+ * **How this composes with contrast.** The cascade does the work, and it only
+ * works in this order:
+ *
+ *   `:root`                                       (0,1,0)  Midnight, base
+ *   `:root:not([data-contrast='off'])`            (0,2,0)  Midnight, system high
+ *   `:root[data-contrast='on']`                   (0,2,0)  Midnight, high
+ *   `:root[data-theme='x']`                       (0,2,0)  skin x, base
+ *   `:root[data-theme='x'][data-contrast='on']`   (0,3,0)  skin x, high
+ *
+ * A skin's base block ties with Midnight's high blocks on specificity and wins
+ * on source order, which is why every skin must come *after* them; its high
+ * block outranks all four. Nothing here is load-bearing on `!important` and
+ * nothing needs to be.
+ *
+ * **Why the skins have no `prefers-contrast` media query.** Midnight has one
+ * because it is what a document is dressed in before the script runs. A skin
+ * cannot be on screen until `data-theme` is set, and `applyContrast` has
+ * already written `data-contrast` by then — so the media query would only ever
+ * duplicate the attribute block. Three skins' worth of duplicate declarations
+ * is real bundle weight for a state that cannot occur.
+ */
+/*
+ * ------------------------------------------------------------- Daybreak --
+ *
+ * A cabinet with the shutters open: warm paper, ink-dark blocks, and a
+ * marmalade accent. The only light skin in the set, so it is the one that
+ * inverts every assumption — `color-scheme` flips, the veils wash *toward*
+ * white, and the seven faces are deep rather than bright, because 3:1
+ * against a pale well is a floor you fall through from the other side.
+ */
+:root[data-theme='daybreak'],
+.swatch[data-theme='daybreak'] {
+  color-scheme: light;
+  --cabinet: #fdf5e6;
+  --cabinet-deep: #f2e6d0;
+  --cabinet-lit: #fffcf4;
+  --panel: #fffaef;
+  --panel-raised: #f7ecd993;
+  --panel-hover: #f3e5cd;
+  --panel-canvas: #fbf3e2;
+  --well: #fdf7ea;
+  --well-deep: #f2e7d2;
+  --field-frame: #8a6f4a;
+  --field-bezel: #e8d9be;
+  --grid-line: #2a1f12;
+  --veil: #fffdf7;
+  --overlay-veil: rgb(253 246 232 / 0.88);
+  --edge: #8a7355;
+  --edge-soft: #dcc9a8;
+  --glow: rgb(255 184 92 / 0.35);
+  --fg: #2a1f12;
+  --fg-muted: #5d4a33;
+  --accent: #9a4a06;
+  --accent-lit: #7d3a02;
+  --accent-ink: #fff8ec;
+  --accent-2: #a41d55;
+  --piece-i: #0e6f78;        /* deep teal */
+  --piece-o: #9a6a00;        /* ochre */
+  --piece-t: #7d2f9c;        /* grape */
+  --piece-s: #2f6b2a;        /* pine */
+  --piece-z: #b02a37;        /* brick */
+  --piece-j: #12489e;        /* ink blue */
+  --piece-l: #c0470a;        /* burnt orange */
+}
+
+:root[data-theme='daybreak'][data-contrast='on'] {
+  --cabinet: #ffffff;
+  --cabinet-deep: #ffffff;
+  --cabinet-lit: #ffffff;
+  --panel: #ffffff;
+  --panel-raised: #ffffff;
+  --panel-hover: #f4ead6;
+  --panel-canvas: #ffffff;
+  --well: #ffffff;
+  --well-deep: #f7efe0;
+  --field-frame: #3a2d18;
+  --field-bezel: #e0cfb0;
+  --grid-line: #120c04;
+  --veil: #ffffff;
+  --overlay-veil: rgb(255 255 255 / 0.95);
+  --edge: #3a2d18;
+  --edge-soft: #6a573a;
+  --glow: transparent;
+  --fg: #120c04;
+  --fg-muted: #3a2d18;
+  --accent: #7a3400;
+  --accent-lit: #5e2700;
+  --accent-ink: #ffffff;
+  --accent-2: #8a0a3e;
+  --piece-i: #00565f;
+  --piece-o: #7a5200;
+  --piece-t: #6a1f88;
+  --piece-s: #1d5418;
+  --piece-z: #96101f;
+  --piece-j: #003080;
+  --piece-l: #9c3300;
+
+  --control-border-width: 2px;
+  --title-fill: var(--accent);
+}
+
+/*
+ * --------------------------------------------------------------- Sunset --
+ *
+ * Late light on a warm evening: a rose-brown interior, amber marquee, and
+ * blocks that keep their hue but lose a little of their chill. Midnight
+ * with the temperature dial turned up, and a different mood for it.
+ */
+:root[data-theme='sunset'],
+.swatch[data-theme='sunset'] {
+  color-scheme: dark;
+  --cabinet: #2b1620;
+  --cabinet-deep: #1c0d14;
+  --cabinet-lit: #4a2130;
+  --panel: #351a24;
+  --panel-raised: #43222f93;
+  --panel-hover: #4d2735;
+  --panel-canvas: #2a1219;
+  --well: #26121a;
+  --well-deep: #180a10;
+  --field-frame: #c08a7e;
+  --field-bezel: #351a24;
+  --grid-line: #ffffff;
+  --veil: #140810;
+  --overlay-veil: rgb(20 8 16 / 0.78);
+  --edge: #c08a7e;
+  --edge-soft: #5c3340;
+  --glow: rgb(255 122 69 / 0.40);
+  --fg: #fff4ec;
+  --fg-muted: #e0b3a8;
+  --accent: #ffb066;
+  --accent-lit: #ffd0a0;
+  --accent-ink: #2b1200;
+  --accent-2: #ff8fae;
+  --piece-i: #3ad3c4;        /* lagoon */
+  --piece-o: #ffd45c;        /* gold */
+  --piece-t: #d98cff;        /* lilac */
+  --piece-s: #9ede5a;        /* pear */
+  --piece-z: #ff6b6b;        /* poppy */
+  --piece-j: #7f9cff;        /* dusk blue */
+  --piece-l: #ff8a3c;        /* ember */
+}
+
+:root[data-theme='sunset'][data-contrast='on'] {
+  --cabinet: #1c0d14;
+  --cabinet-deep: #0b0407;
+  --cabinet-lit: #2b1620;
+  --panel: #180a10;
+  --panel-raised: #180a10;
+  --panel-hover: #3a1b26;
+  --panel-canvas: #10060a;
+  --well: #0d0509;
+  --well-deep: #060203;
+  --field-frame: #f0c4b8;
+  --field-bezel: #180a10;
+  --grid-line: #ffffff;
+  --veil: #060203;
+  --overlay-veil: rgb(6 2 3 / 0.93);
+  --edge: #f0c4b8;
+  --edge-soft: #c49183;
+  --glow: transparent;
+  --fg: #ffffff;
+  --fg-muted: #ffe4dc;
+  --accent: #ffc98a;
+  --accent-lit: #ffe0bc;
+  --accent-ink: #1a0800;
+  --accent-2: #ffb0c6;
+  --piece-i: #6fe8dc;
+  --piece-o: #ffe28c;
+  --piece-t: #e8b0ff;
+  --piece-s: #bcec8c;
+  --piece-z: #ff9c9c;
+  --piece-j: #a8bcff;
+  --piece-l: #ffb374;
+
+  --control-border-width: 2px;
+  --title-fill: var(--accent);
+}
+
+/*
+ * --------------------------------------------------------------- Lagoon --
+ *
+ * Deep water lit from the surface: green-blue all the way down, with a
+ * coral accent that has nowhere to hide against it. The cool answer to
+ * Sunset, and the one that proves a skin can move every surface at once.
+ */
+:root[data-theme='lagoon'],
+.swatch[data-theme='lagoon'] {
+  color-scheme: dark;
+  --cabinet: #0f2b38;
+  --cabinet-deep: #07171f;
+  --cabinet-lit: #17394b;
+  --panel: #123140;
+  --panel-raised: #1a405493;
+  --panel-hover: #1d4859;
+  --panel-canvas: #0d2632;
+  --well: #0c2430;
+  --well-deep: #06161e;
+  --field-frame: #74aec2;
+  --field-bezel: #123140;
+  --grid-line: #ffffff;
+  --veil: #04121a;
+  --overlay-veil: rgb(4 18 26 / 0.80);
+  --edge: #74aec2;
+  --edge-soft: #2d5a6e;
+  --glow: rgb(56 189 209 / 0.40);
+  --fg: #eefaff;
+  --fg-muted: #a9cedc;
+  --accent: #ff9d70;
+  --accent-lit: #ffbfa0;
+  --accent-ink: #2a0d05;
+  --accent-2: #ffe066;
+  --piece-i: #5ce1ff;        /* shallows */
+  --piece-o: #ffd95c;        /* sunlight */
+  --piece-t: #b48cff;        /* anemone */
+  --piece-s: #5fdba0;        /* kelp */
+  --piece-z: #ff6f8b;        /* clownfish */
+  --piece-j: #4f8fe0;        /* deep blue */
+  --piece-l: #ff9d54;        /* coral */
+}
+
+:root[data-theme='lagoon'][data-contrast='on'] {
+  --cabinet: #07171f;
+  --cabinet-deep: #020a0e;
+  --cabinet-lit: #0d2634;
+  --panel: #061520;
+  --panel-raised: #061520;
+  --panel-hover: #123241;
+  --panel-canvas: #040f16;
+  --well: #030d13;
+  --well-deep: #010609;
+  --field-frame: #b6dced;
+  --field-bezel: #061520;
+  --grid-line: #ffffff;
+  --veil: #010609;
+  --overlay-veil: rgb(1 6 9 / 0.93);
+  --edge: #b6dced;
+  --edge-soft: #88b8cc;
+  --glow: transparent;
+  --fg: #ffffff;
+  --fg-muted: #e2f3fb;
+  --accent: #ffbb96;
+  --accent-lit: #ffd6c0;
+  --accent-ink: #1a0600;
+  --accent-2: #ffea9a;
+  --piece-i: #8eeaff;
+  --piece-o: #ffe68c;
+  --piece-t: #cdaeff;
+  --piece-s: #8ce8bc;
+  --piece-z: #ff9caf;
+  --piece-j: #8cb4f0;
+  --piece-l: #ffbc86;
 
   --control-border-width: 2px;
   --title-fill: var(--accent);
@@ -1563,6 +1856,51 @@ body {
   font-size: 0.7rem;
   color: var(--fg-muted);
   text-wrap: pretty;
+}
+
+/*
+ * -- the skin picker's swatches --
+ *
+ * A cabinet in miniature: the well, its frame, and four of the seven faces.
+ * Every colour in here comes from `var(--…)`, and the chip carries the skin's
+ * own `data-theme` — which the palette blocks at the top of this file select on
+ * as well as on `:root`. So a swatch is painted by the same declarations the
+ * cabinet would be, and a skin that changed without its chip changing is not a
+ * state this can get into.
+ *
+ * The chips inherit `--control-border-width` from the root, so the frames
+ * thicken with the rest of the cabinet in high contrast.
+ */
+.swatch {
+  display: flex;
+  align-items: center;
+  gap: 0.14rem;
+  padding: 0.22rem 0.26rem;
+  border: var(--control-border-width) solid var(--field-frame);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(var(--well), var(--well-deep));
+}
+
+.swatch__chip {
+  width: 0.42rem;
+  height: 0.8rem;
+  border-radius: 0.12rem;
+}
+
+.swatch__chip--i {
+  background: var(--piece-i);
+}
+
+.swatch__chip--o {
+  background: var(--piece-o);
+}
+
+.swatch__chip--t {
+  background: var(--piece-t);
+}
+
+.swatch__chip--z {
+  background: var(--piece-z);
 }
 
 /* -- handling sliders -- */
