@@ -99,6 +99,90 @@ describe('the composition root', () => {
 
 });
 
+describe('the recorder', () => {
+  /**
+   * **The recorder observes; it does not participate.**
+   *
+   * `engine/replay.test.ts` proves the recorder itself cannot change a run —
+   * it plays the same script with and without one. What that test cannot see is
+   * the composition root, where a well-meaning refactor could still put the
+   * tape *in* the update path: wrapping `update`, adjusting a delta, or letting
+   * a `record` call decide what gets applied. These checks pin the shape here.
+   */
+  const code = stripComments(MAIN);
+
+  it('records the clock before the input it is recording', () => {
+    // The log stores the clock as it stood when the key was pressed. Recording
+    // after `applyInput` would write down the clock of the state the input
+    // produced, and a replay built from it would be a frame out on every entry.
+    const record = code.indexOf('recorder.record(state.elapsedMs, input.type)');
+    const apply = code.indexOf('setState(applyInput(state, input))');
+    expect(record).toBeGreaterThan(-1);
+    expect(apply).toBeGreaterThan(-1);
+    expect(record).toBeLessThan(apply);
+  });
+
+  it('marks the clock after the engine has advanced it, never before', () => {
+    // Inside the frame, where it would matter: the tape reads the clock the
+    // engine has just set, and cannot have touched the delta on the way in.
+    const frame = code.slice(code.indexOf('onFrame(deltaMs)'));
+    const advance = frame.indexOf('setState(update(state, deltaMs))');
+    const mark = frame.indexOf('recorder.mark(state.elapsedMs)');
+    expect(advance).toBeGreaterThan(-1);
+    expect(mark).toBeGreaterThan(advance);
+  });
+
+  it('never stands between the loop and the engine', () => {
+    // No `update(state, recorder.something())`, no recorder-derived delta. The
+    // engine is fed the frame's own milliseconds and nothing else.
+    expect(/update\(\s*state\s*,\s*deltaMs\s*\)/.test(code)).toBe(true);
+    expect(/update\([^)]*recorder/.test(code)).toBe(false);
+    expect(/applyInput\([^)]*recorder/.test(code)).toBe(false);
+  });
+
+  it('starts a fresh tape for every game it deals', () => {
+    // A tape that survived a re-deal would be a recording of one run played
+    // against the seed of another. Every `createGame` in the composition root
+    // goes through `dealGame`, which resets it.
+    expect(code).toContain('function dealGame(');
+    const deals = [...code.matchAll(/createGame\(/g)].length;
+    const throughDealGame = [...code.matchAll(/dealGame\(createGame\(/g)].length;
+    // The one that is not: the opening snapshot, built before the tape exists.
+    expect(deals - throughDealGame).toBe(1);
+  });
+
+  it('refuses to offer a truncated tape as a replay', () => {
+    // A log that stopped at the cap is a correct prefix, not the whole run.
+    expect(code).toContain('recorder.truncated()');
+  });
+});
+
+describe('the replay viewer', () => {
+  const code = stripComments(MAIN);
+
+  it('paints a replay through the same renderer as a live game', () => {
+    // The dividend of a pure painter: the replay changes *which* snapshot is
+    // drawn, and nothing else. A second render path would be the bug.
+    expect([...code.matchAll(/board\.render\(/g)]).toHaveLength(1);
+    expect(code).toContain('replayViewer.state() ?? state');
+  });
+
+  it('does not advance the live game while a replay is playing', () => {
+    // Watching a recording must not cost the player the piece they left
+    // falling behind it.
+    const frame = code.slice(code.indexOf('onFrame(deltaMs)'));
+    const guard = frame.indexOf('if (replayViewer.active())');
+    const advance = frame.indexOf('setState(update(state, deltaMs))');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(advance);
+  });
+
+  it('lets Escape out from anywhere', () => {
+    expect(code).toContain("normalizeKey(event.key) !== 'Escape'");
+    expect(code).toContain('leaveReplay(true)');
+  });
+});
+
 describe('the engine boundary', () => {
   // `src/engine/index.ts` is the public surface. Reaching around it into
   // `../engine/game` works today and pins the UI to a file layout the engine

@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { cellLabel, defaultDaily, historyCells } from './daily';
 import { createModal, focusableWithin } from './dialog';
 import { createKeyboardInput, type ActionId } from './input';
+import { REPLAY_SPEEDS } from './replay';
 import { createShell, type Shell } from './shell';
 
 let root: HTMLElement;
@@ -108,6 +109,25 @@ describe('the page axe sees', () => {
     expect(report(violations)).toBe('');
   });
 
+  it('has no violations with a replay playing', async () => {
+    // The replay bar, the badge and the run-summary panel's two extra buttons,
+    // all as `src/main.ts` leaves them while a replay is on the well.
+    document.documentElement.dataset['replay'] = 'on';
+    shell.replayBar.hidden = false;
+    shell.replayBadge.hidden = false;
+    shell.replayTitle.textContent = 'Watching a shared run';
+    shell.replayDetail.textContent = 'Marathon — Game over';
+    shell.replayProgress.textContent = '0:20 / 1:05';
+    shell.overlay.hidden = false;
+    shell.overlayActions.hidden = false;
+    shell.shareFallback.hidden = false;
+    shell.shareText.value = 'https://example.test/#r=abc';
+
+    const violations = await audit();
+
+    expect(report(violations)).toBe('');
+  });
+
   it('has no violations with the pause menu open', async () => {
     shell.pauseDialog.hidden = false;
     for (const node of shell.background) {
@@ -128,6 +148,90 @@ describe('the page axe sees', () => {
     const violations = await audit();
 
     expect(report(violations)).toBe('');
+  });
+});
+
+describe('the replay bar', () => {
+  beforeEach(() => {
+    shell.replayBar.hidden = false;
+    shell.replayBadge.hidden = false;
+  });
+
+  it('is a labelled region rather than content adrift outside a landmark', () => {
+    expect(shell.replayBar.tagName).toBe('SECTION');
+    expect(shell.replayBar.getAttribute('aria-label')).not.toBe('');
+    expect(shell.replayBar.getAttribute('aria-label')).not.toBeNull();
+  });
+
+  it('is under the well, not over it', () => {
+    // The one layout rule a replay has: watching a run is entirely about
+    // watching the field, so nothing may cover it.
+    expect(shell.replayBar.closest('.playfield')).toBeNull();
+  });
+
+  it('is every one of it a real button with a name', () => {
+    const buttons = [
+      shell.replayPlay,
+      shell.replayRestart,
+      shell.replayExit,
+      ...shell.replaySpeeds,
+    ];
+    for (const button of buttons) {
+      expect(button.tagName).toBe('BUTTON');
+      expect(button.type).toBe('button');
+      expect((button.getAttribute('aria-label') ?? button.textContent ?? '').trim()).not.toBe('');
+    }
+  });
+
+  it('says which speed is chosen rather than only colouring it in', () => {
+    const pressed = shell.replaySpeeds.filter(
+      (button) => button.getAttribute('aria-pressed') === 'true',
+    );
+    expect(pressed).toHaveLength(1);
+    for (const button of shell.replaySpeeds) {
+      expect(['true', 'false']).toContain(button.getAttribute('aria-pressed'));
+    }
+    expect(shell.replaySpeeds).toHaveLength(REPLAY_SPEEDS.length);
+  });
+
+  it('groups the speeds under a name of their own', () => {
+    const group = shell.replayBar.querySelector('[role="group"]');
+    expect(group).not.toBeNull();
+    expect(group?.getAttribute('aria-label')).toBe('Playback speed');
+  });
+
+  it('joins the tab order as soon as it is showing', () => {
+    for (const button of [shell.replayPlay, shell.replayExit, ...shell.replaySpeeds]) {
+      expect(focusableWithin(document.body)).toContain(button);
+    }
+  });
+
+  it('keeps the badge out of the accessibility tree, because the bar says it', () => {
+    // Two announcements of the word "Replay" would be one too many; the visible
+    // stamp is for eyes, the bar is for everybody.
+    expect(shell.replayBadge.getAttribute('aria-hidden')).toBe('true');
+    expect(shell.replayBar.textContent).toContain('Replay');
+  });
+
+  it('goes inert with everything else when a dialog opens', () => {
+    expect(shell.background).toContain(shell.replayBar);
+  });
+});
+
+describe('sharing a run', () => {
+  it('labels the fallback box and leaves it read-only', () => {
+    shell.shareFallback.hidden = false;
+    const label = document.querySelector(`label[for="${shell.shareText.id}"]`);
+    expect(label).not.toBeNull();
+    expect(shell.shareText.id).not.toBe('');
+    expect(shell.shareText.readOnly).toBe(true);
+  });
+
+  it('offers watching and sharing as real buttons with names', () => {
+    for (const button of [shell.overlayReplay, shell.overlayShare]) {
+      expect(button.tagName).toBe('BUTTON');
+      expect((button.textContent ?? '').trim()).not.toBe('');
+    }
   });
 });
 

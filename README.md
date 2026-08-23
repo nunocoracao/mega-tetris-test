@@ -2,7 +2,7 @@
 
 A cheerful falling-block puzzle game that lives entirely in the browser — a
 tiny arcade cabinet at a URL. No backend and no accounts: three static files
-totalling **38 KB gzipped**, and you are playing. Install it and it is a cabinet
+totalling **45 KB gzipped**, and you are playing. Install it and it is a cabinet
 on your home screen too, playable with the network switched off.
 
 **▶ [Play it](https://nunocoracao.github.io/mega-tetris-test/)**
@@ -21,6 +21,11 @@ browser.
 - **Three ways to play.** Marathon until you top out, Sprint for the fastest 40
   lines, Ultra for the highest score in two minutes — the same game with a
   different finish line, each with its own record book. See [Modes](#modes).
+- **Replays, and a run in a link.** Every game is recorded as the keys you
+  pressed and when — watch it back in the well at 1×, 2× or 4×, or put the whole
+  run in a URL and hand it to somebody. Nothing is uploaded: the run travels in
+  the fragment, which browsers never send to a server. See
+  [Replays and shared runs](#replays-and-shared-runs).
 - **A daily challenge, with no server.** Everyone who opens the page on the same
   UTC day gets the same pieces, because the seed is a hash of the date. One
   attempt, a streak, a thirty-day strip, and a line you can paste to a friend.
@@ -169,6 +174,109 @@ point. `navigator.clipboard` is absent over plain HTTP and rejects when the
 permission is denied, so when it fails the same text appears in a labelled,
 read-only, pre-selected field instead.
 
+## Replays and shared runs
+
+The README has said from the first week that the game is a pure function of
+`(seed, ordered list of calls)`. This is what that claim was for.
+
+**A run is its inputs.** While you play, a recorder writes down every input and
+the run clock it happened on. It writes down nothing else — no board states, no
+frames, no positions — because it does not need to: `update` consumes its delta
+in slices bounded by the next deadline, which makes it *additive*, so `update(a)`
+then `update(b)` produces exactly the state `update(a + b)` does. A log therefore
+needs the moments something happened, not the sixty frame deltas a second the
+browser actually fed the engine. A two-minute Ultra comes to a few hundred
+entries.
+
+```ts
+import { createRecorder, replay } from './engine';
+
+const log = recorder.log();               // { durationMs, entries, truncated }
+const final = replay(seed, { startLevel, mode }, log);
+// final is deeply equal to the state the run ended on — board, bag, score,
+// combo, back-to-back chain, hold, the lot.
+```
+
+`src/engine/replay.test.ts` is the test the whole feature exists for: it plays
+five seeds through a placement bot, records five hundred to a thousand inputs
+each, replays them, and asserts the final `GameState` with `toEqual`. **If that
+goes red the engine has grown a hidden piece of state, and that is the bug** —
+not the test. A stepped variant, `startReplay`/`advanceReplay`, is what the
+viewer drives; speed is nothing but a bigger delta, so there is no second code
+path for 4×.
+
+**The recorder observes; it does not participate.** It is handed the clock and
+the input by the two lines that were about to apply them, and it hands nothing
+back — no wrapped `update`, no adjusted delta, no callback the game waits on.
+`replay.test.ts` proves it by playing the same script twice, once watched and
+once not; `wiring.test.ts` pins the shape in `src/main.ts`. The log is capped at
+20,000 entries, and at the cap the recorder **stops and says so** rather than
+dropping the oldest entries: a log with a hole in it is not a shorter replay, it
+is a wrong one.
+
+One thing did change for this: `ui/loop.ts` now hands the engine **whole
+milliseconds**, carrying the fraction over to a later frame (`splitWholeMs`).
+`requestAnimationFrame` deals in 16.666…, and a run clock reading 4283.9994
+cannot be written down in a link somebody else's browser will rebuild the same
+run from. The carry is what keeps the game running at exactly the speed it
+always did.
+
+**Watching it back** reuses the renderer exactly as it is, because a replay is
+just a `GameState` being painted — that is what the renderer being a pure
+painter buys. Nothing in `ui/renderer.ts` knows a replay from a live game. What
+does know is the chrome, and it says so three ways at once, none of them only a
+colour: the well takes an orchid ring, a **Replay** badge sits in its corner, and
+the playfield's accessible name and description both start with the word. The
+bar under the well has Play/Pause, 1× / 2× / 4×, Start over and Leave; with the
+well focused, Space is play/pause, `R` starts over and **Escape leaves**, from
+wherever focus happens to be. The live game underneath is not advanced by a
+single millisecond while you watch.
+
+**Copy replay link** puts `{version, mode, seed, startLevel, log}` in the URL
+fragment. The format is a two-byte header — a format version and a codec — and
+then a body of LEB128 varints in which the time gap and the input index are
+folded into one number, so an ordinary keypress costs two bytes. The body is
+deflated with `CompressionStream` where the browser has one and stored as it is
+where it does not, whichever comes out smaller. The 294-input run this paragraph
+was measured against came to **365 characters** of URL.
+
+The fragment, deliberately: it is the half of a URL a browser never sends
+anywhere, and there is nowhere for it to be sent. **A run too long to fit says
+so** and offers the score-only share line instead — a link that arrives cut in
+half by a chat client is worse than no link at all.
+
+**Opening one is opening a stranger's input**, and it is guarded exactly the way
+`ui/storage.ts` guards `localStorage`. `decodeShare` is pure, synchronous and
+total: every path out of it is a result, none of them throws, and every length in
+the payload is checked against a cap *before* it is used — a four-byte varint can
+claim a hundred million entries, and believing it would be the whole attack.
+Malformed, truncated, oversized, junk and hostile payloads all produce one
+friendly sentence and an ordinary start screen. `src/engine/share.test.ts` feeds
+it several thousand pieces of deliberate garbage, every truncation of a real
+link, and real links with a character swapped, and asserts it never throws and
+never hands back a run the replayer cannot be given.
+
+Decompression is **ours** — about a hundred and thirty lines of raw DEFLATE at
+the bottom of `src/engine/share.ts`, checked against `node:zlib` at four
+compression levels so it is a real decoder rather than something that happens to
+undo our own compressor. `DecompressionStream` is asynchronous and merely widely
+available; a friend's link has to open on the first frame in whatever browser
+they clicked it in. No compression dependency was added and none should be.
+
+### The replay format is a contract
+
+A replay is a recording of *decisions*, not of pixels, and it only means
+anything against the rules that were in force when it was made. **Change gravity,
+scoring, the bag, the wall kicks, the lock delay, spawn positions or the mode
+rules and every log ever written decodes into a different run.**
+
+So: `REPLAY_FORMAT_VERSION` in `src/engine/replay.ts` goes up whenever an engine
+rule changes. Every payload carries it, and a version this build does not
+understand is refused with a clear message rather than played back into a run
+that never happened. This is the one place in the project where the determinism
+rule has an external contract — a link somebody sent last month is a promise
+about the rules, and the version number is how it is kept.
+
 ## Installing it
 
 The game was always three static files and no runtime dependencies, which is
@@ -260,6 +368,20 @@ again" on the game-over panel, from wherever focus happens to be.
 
 Keys pressed while a dialog is open belong to the dialog, so arrows scroll a
 long help panel rather than moving a piece nobody can see.
+
+While a **replay** is on the well, four of those keys do a second job and every
+other one is deliberately swallowed — pressing left during a recording of
+somebody else's game should do nothing at all:
+
+| Keys        | In a replay              |
+| ----------- | ------------------------ |
+| `Space`     | Play / pause             |
+| `R`         | Watch it again           |
+| `P` / `Esc` | Leave the replay         |
+| `?` / `H`   | Help                     |
+
+`Escape` also works from the replay bar's own buttons, where the game layer
+leaves keys inside controls alone.
 
 ### Touch — gestures over the well
 
@@ -383,15 +505,28 @@ dependencies:
 
 | File         | Raw      | Gzipped     |
 | ------------ | -------- | ----------- |
-| `index.js`   | 92.6 KB  | **31.8 KB** |
-| `index.css`  | 22.5 KB  | **5.0 KB**  |
+| `index.js`   | 111.9 KB | **38.4 KB** |
+| `index.css`  | 24.8 KB  | **5.3 KB**  |
 | `index.html` | 2.5 KB   | **1.1 KB**  |
-| **Total**    | 117.6 KB | **37.9 KB** |
+| **Total**    | 139.2 KB | **44.8 KB** |
 
-JS + CSS is **36.8 KB gzipped**, against a budget of 100 KB — a rise of 1.2 KB
-for the install offer, the update notice and the worker's page-side half. The
-favicon is still an inline SVG data URI, there are still no web fonts and no
-audio files, and starting a game still costs exactly those three requests.
+JS + CSS is **43.7 KB gzipped**, against a budget of 100 KB. Replays and shared
+runs cost **+7.6 KB gzipped** of that, and it is worth saying where it went,
+because it is the largest single rise this project has had:
+
+| Module                             | Gzipped    |
+| ---------------------------------- | ---------- |
+| `engine/share.ts` — codec, base64url, **and a whole raw-DEFLATE decoder** | 3.1 KB |
+| `ui/replay.ts` — the viewer's machine and its copy | 1.0 KB |
+| `engine/replay.ts` — log, replayer, recorder | 0.9 KB |
+| `ui/share.ts` — the compressor and the link | 0.6 KB |
+| the replay bar, the share controls, the CSS and the wiring | ~2.0 KB |
+
+Most of it is the decompressor, and it is still the cheap option: `pako`'s
+inflate alone is several times this, and it would have been a runtime dependency
+in a project that has none. The favicon is still an inline SVG data URI, there
+are still no web fonts and no audio files, and starting a game still costs
+exactly those three requests.
 
 Everything else is fetched by the service worker after the first paint, or by
 the platform when the app is installed, and none of it is on the path to a game:
@@ -413,6 +548,9 @@ asset.
 ├── index.html          # Document shell and Vite entry point
 ├── src/
 │   ├── engine/         # The game. Pure, deterministic, DOM-free.
+│   │                   #   game.ts, board.ts, pieces.ts, random.ts, daily.ts,
+│   │                   #   replay.ts (record and play back), share.ts (a run
+│   │                   #   in a link, plus a raw-DEFLATE decoder)
 │   ├── ui/             # The browser layer: canvas, input, DOM, storage.
 │   ├── main.ts         # Composition root — the one place they meet
 │   ├── style.css       # The palette and the layout, in one `:root` block
@@ -447,7 +585,10 @@ state = applyInput(state, { type: 'hardDrop' });
 Every call returns a brand-new immutable snapshot and never touches its input.
 That makes the game a pure function of `(seed, ordered list of calls)`: the same
 seed and the same script always produce a deeply equal result, which is what
-lets the tests assert real behaviour instead of poking at internals.
+lets the tests assert real behaviour instead of poking at internals — and what
+[replays and shared runs](#replays-and-shared-runs) are built on. Any new state
+must go *in the snapshot*: a module-level counter or a closure is invisible to a
+replay and desynchronises it.
 
 `update` consumes its delta in slices bounded by the next deadline — the next
 gravity step, the end of the lock delay, the end of a line-clear pause — so one
@@ -506,7 +647,7 @@ duplicate.
 
 ## Testing
 
-Around 850 tests, in about five seconds.
+Around 990 tests, in about seven seconds.
 
 The engine carries a coverage floor because it is the part that must not rot.
 The browser layer does not, deliberately: the tests there cover the **pure**
@@ -524,9 +665,19 @@ one the build uses, so it is a second opinion rather than an echo), and the
 while serving a request, and that its one `skipWaiting` is inside the message
 handler.
 
+The two files that carry the most weight are `src/engine/replay.test.ts` and
+`src/engine/share.test.ts`. The first is the determinism claim, cashed: five
+seeds, a placement bot, five hundred to a thousand recorded inputs each, and a
+`toEqual` on the final `GameState`. The second is the only decoder in the
+project that reads something a stranger wrote, so it gets several thousand
+pieces of deliberate junk, every truncation of a real link, real links with a
+character swapped, a deflate bomb, and a check of the hand-rolled inflate
+against `node:zlib` at four compression levels.
+
 Two files run in jsdom rather than Node: `src/ui/a11y.test.ts` runs axe-core
-over the real shell four times (dialogs closed, the start screen and its two
-pickers showing, pause menu open, help panel open) and then checks the things a
+over the real shell five times (dialogs closed, the start screen and its two
+pickers showing, a replay playing, pause menu open, help panel open) and then
+checks the things a
 static audit cannot see — focus moving in and back out, `Tab` wrapping,
 `Escape` not reaching the game underneath, the background going `inert`, and
 the mode picker being three real buttons that take focus and say which one is
@@ -554,9 +705,13 @@ orientation changes mid-game; backgrounding the tab; a full two-minute Ultra
 run checked to stop on 120000 ms exactly with the last ten seconds lit; a
 Sprint played to a did-not-finish; a daily attempt played out, refreshed
 mid-run to prove the attempt survives it, copied to a real clipboard *and*
-through the fallback with `navigator.clipboard` deleted; and a layout
-measurement at ten viewport sizes checking for page scroll, overlapping bands
-and a playable cell size.
+through the fallback with `navigator.clipboard` deleted; a full game played by
+a placement bot, recorded, replayed in the page and checked cell-for-cell
+against the live board; a share link built through the real button, opened in a
+fresh browser context and watched back; and the same URL with a mangled,
+truncated, oversized and non-base64url fragment, each of which has to produce a
+sentence and an ordinary start screen; and a layout measurement at ten viewport
+sizes checking for page scroll, overlapping bands and a playable cell size.
 
 ## Contributing
 
@@ -581,6 +736,14 @@ that means, for anything you add under `src/engine/`:
 5. **Say what happened, not how to show it.** New behaviour worth animating gets
    a new `GameEvent` in game terms. Durations, colours and sounds belong in
    `src/ui/`.
+6. **If you change a rule, bump `REPLAY_FORMAT_VERSION`.** Gravity, scoring, the
+   bag, the wall kicks, the lock delay, spawn positions, the mode rules — change
+   any of them and every replay ever recorded decodes into a different run. The
+   version in `src/engine/replay.ts` is what turns "this link is from an older
+   game" into a clear message instead of a silent lie. It is the one place the
+   determinism rule has an **external contract**: somebody may have sent that
+   link to a friend last month. See
+   [Replays and shared runs](#replays-and-shared-runs).
 
 And in the other direction: **no game rules in `src/ui/`.** If you find yourself
 writing a score, a level threshold or a board dimension there, import the

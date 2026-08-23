@@ -16,6 +16,7 @@ import {
   escapeHtml,
   helpBodyMarkup,
   keyboardRows,
+  replayRows,
   scoringRows,
 } from './help';
 import { KEY_BINDINGS, describeBinding } from './input';
@@ -98,6 +99,29 @@ describe('scoringRows', () => {
   });
 });
 
+describe('replayRows', () => {
+  it('names the replay keys from the binding table rather than retyping them', () => {
+    // The same rule the rest of this panel lives by: rebind pause and the
+    // "leave the replay" line follows it, because there is no second copy.
+    const rows = replayRows();
+    for (const action of ['hardDrop', 'restart', 'togglePause'] as const) {
+      const binding = KEY_BINDINGS.find((candidate) => candidate.action === action);
+      expect(binding).toBeDefined();
+      if (binding !== undefined) {
+        expect(rows.map((row) => row.term)).toContain(describeBinding(binding));
+      }
+    }
+  });
+
+  it('is honest about the run that will not fit in a link', () => {
+    expect(replayRows().some((row) => /too long/i.test(row.detail))).toBe(true);
+  });
+
+  it('says nothing is uploaded, because nothing is', () => {
+    expect(replayRows().some((row) => /nothing is uploaded/i.test(row.detail))).toBe(true);
+  });
+});
+
 describe('escapeHtml', () => {
   it('neutralises the four characters that matter', () => {
     expect(escapeHtml('<a href="x">&</a>')).toBe('&lt;a href=&quot;x&quot;&gt;&amp;&lt;/a&gt;');
@@ -118,8 +142,8 @@ describe('helpBodyMarkup', () => {
     }
   });
 
-  it('covers the gestures, the scoring and the two mechanics', () => {
-    for (const row of [...TOUCH_GESTURES, ...scoringRows(), ...MECHANIC_NOTES]) {
+  it('covers the gestures, the scoring, the mechanics and the replay controls', () => {
+    for (const row of [...TOUCH_GESTURES, ...scoringRows(), ...MECHANIC_NOTES, ...replayRows()]) {
       expect(markup).toContain(escapeHtml(row.term));
     }
   });

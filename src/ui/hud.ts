@@ -211,6 +211,14 @@ export interface OverlayContent {
   readonly showLevelSelect: boolean;
   readonly showHelp: boolean;
   /**
+   * Show the "watch replay" and "copy replay link" controls.
+   *
+   * Only on the run-summary panel, and only when there is actually a log to
+   * watch — a run whose tape was truncated, or one the page was opened part-way
+   * through, has nothing to offer and should not pretend otherwise.
+   */
+  readonly showReplay: boolean;
+  /**
    * Show the daily challenge block — the date, the streak, the thirty-day strip
    * and its buttons. True on the start screen, and at the end of a run that was
    * itself a daily one, which is where "copy result" belongs.
@@ -238,6 +246,16 @@ export interface OverlayView {
    * pointing one way. `null` for an ordinary run, which is most of them.
    */
   readonly dailyNote?: string | null;
+  /** There is a complete recording of the run that just ended. */
+  readonly canReplay?: boolean;
+  /**
+   * A sentence to put under the start screen's title instead of the personal
+   * best — a replay link that did not work, or one that has just finished. The
+   * live region says it too, but an announcement is not a message: somebody who
+   * clicked a friend's link and got a start screen deserves something they can
+   * actually read.
+   */
+  readonly notice?: string | null;
 }
 
 /** `'—'` rather than a zero, for a best that does not exist yet. */
@@ -385,13 +403,17 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
         hint: controls,
         button: 'Play',
         rows: [],
+        // A notice wins over the teaser: "that link did not work" is news, and
+        // a personal best is not.
         note:
-          best !== null && hasBest(best, mode)
+          view.notice ??
+          (best !== null && hasBest(best, mode)
             ? `Your best ${MODE_LABELS[mode]}: ${bestLine(best, mode)}.`
-            : null,
+            : null),
         showLevelSelect: true,
         showHelp: true,
         showDaily: true,
+        showReplay: false,
       };
     }
     case 'paused':
@@ -408,6 +430,7 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
         showLevelSelect: false,
         showHelp: false,
         showDaily: false,
+        showReplay: false,
       };
     case 'over': {
       const result = view.result ?? null;
@@ -451,6 +474,7 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
         showLevelSelect: false,
         showHelp: false,
         showDaily: dailyNote !== null,
+        showReplay: view.canReplay === true,
       };
     }
     case 'playing':
@@ -864,6 +888,19 @@ export interface HudView {
   readonly startLevel?: number;
   /** The daily footnote for the run that just ended — see `OverlayView`. */
   readonly dailyNote?: string | null;
+  /** There is a complete recording of the run that just ended. */
+  readonly canReplay?: boolean;
+  /** A sentence for the start screen — see `OverlayView`. */
+  readonly notice?: string | null;
+  /**
+   * What is on the canvas is a replay, not a live game.
+   *
+   * The visible tells are the badge and the tinted frame; this is the one a
+   * screen reader gets, and it matters just as much — a description that read
+   * exactly like a game in progress would be the accessible version of the
+   * mistake the tint exists to prevent.
+   */
+  readonly replay?: boolean;
 }
 
 export interface Hud {
@@ -958,6 +995,7 @@ export function createHud(shell: Shell): Hud {
 
     setHidden(shell.overlayStart, !content.showLevelSelect);
     setHidden(shell.overlayHelp, !content.showHelp);
+    setHidden(shell.overlayActions, !content.showReplay);
     // The block's *contents* are written by `main.ts` when the record changes,
     // not per frame; all the overlay decides is whether it is on screen.
     setHidden(shell.daily, !content.showDaily);
@@ -972,8 +1010,9 @@ export function createHud(shell: Shell): Hud {
    */
   let summarySignature = '';
 
-  function refreshSummary(state: GameState): void {
+  function refreshSummary(state: GameState, replaying: boolean): void {
     const signature = [
+      replaying ? 'replay' : 'live',
       state.status,
       state.score,
       state.level,
@@ -991,7 +1030,8 @@ export function createHud(shell: Shell): Hud {
       return;
     }
     summarySignature = signature;
-    setText(shell.boardSummary, describePlayfield(state));
+    const summary = describePlayfield(state);
+    setText(shell.boardSummary, replaying ? `Replay. ${summary}` : summary);
     setText(shell.nextText, describeQueue(state));
     setText(shell.holdText, describeHold(state));
   }
@@ -1019,7 +1059,7 @@ export function createHud(shell: Shell): Hud {
         setText(nodes.value, row.value);
       }
       setText(shell.playButton, playButtonLabel(state));
-      refreshSummary(state);
+      refreshSummary(state, view.replay === true);
 
       // A quiet flag while the run in progress is already past the best on its
       // own ladder. A record you are *setting* is worth more encouragement than
@@ -1048,6 +1088,8 @@ export function createHud(shell: Shell): Hud {
               result: view.result ?? null,
               startLevel: view.startLevel,
               dailyNote: view.dailyNote ?? null,
+              canReplay: view.canReplay ?? false,
+              notice: view.notice ?? null,
             });
       if (overlay === null) {
         setHidden(shell.overlay, true);

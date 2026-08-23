@@ -43,6 +43,49 @@ export {
 
 export { dailySeed, isDateStamp, DATE_STAMP_PATTERN } from './daily';
 
+export type {
+  RecorderOptions,
+  ReplayEntry,
+  ReplayInput,
+  ReplayLog,
+  ReplayOptions,
+  ReplayPlayer,
+  RunRecorder,
+} from './replay';
+export {
+  advanceReplay,
+  createRecorder,
+  emptyLog,
+  isReplayInput,
+  replay,
+  restartReplay,
+  startReplay,
+  MAX_LOG_ENTRIES,
+  MAX_REPLAY_MS,
+  REPLAY_FORMAT_VERSION,
+  REPLAY_INPUTS,
+} from './replay';
+
+export type { ShareErrorReason, SharePayload, ShareResult, SharedRun } from './share';
+export {
+  decodeShare,
+  fromBase64Url,
+  inflateRaw,
+  inflateZlib,
+  packShare,
+  readShareFragment,
+  shareFragment,
+  sharePayloadBytes,
+  toBase64Url,
+  MAX_BODY_BYTES,
+  MAX_DECODE_CHARS,
+  MAX_SHARE_CHARS,
+  SHARE_CODEC_DEFLATE,
+  SHARE_CODEC_STORED,
+  SHARE_ERROR_MESSAGES,
+  SHARE_FRAGMENT_KEY,
+} from './share';
+
 export type { Bag, BagState, RandomFn } from './random';
 export {
   createBag,

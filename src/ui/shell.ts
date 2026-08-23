@@ -34,6 +34,7 @@ import {
   READOUT_ROW_KEYS,
 } from './hud';
 import { KEY_BINDINGS, describeBinding } from './input';
+import { REPLAY_SPEEDS, replaySpeedLabel } from './replay';
 import { START_LEVELS } from './stats';
 import { TOUCH_PAD_BUTTONS } from './touch';
 
@@ -86,6 +87,26 @@ export interface Shell {
   readonly overlayButton: HTMLButtonElement;
   /** The 3-2-1 shown over the well on the way back from a pause. */
   readonly countdown: HTMLElement;
+  /** "Watch replay" and "Copy replay link", on the run-summary panel. */
+  readonly overlayActions: HTMLElement;
+  readonly overlayReplay: HTMLButtonElement;
+  readonly overlayShare: HTMLButtonElement;
+  /** Shown only when the clipboard refuses the replay link. */
+  readonly shareFallback: HTMLElement;
+  readonly shareText: HTMLTextAreaElement;
+  /** The "Replay" stamp over the well. */
+  readonly replayBadge: HTMLElement;
+  /** The replay bar: what is playing, how far through, and the controls. */
+  readonly replayBar: HTMLElement;
+  readonly replayTitle: HTMLElement;
+  readonly replayDetail: HTMLElement;
+  readonly replayFill: HTMLElement;
+  readonly replayProgress: HTMLElement;
+  readonly replayPlay: HTMLButtonElement;
+  /** The 1x / 2x / 4x buttons, in the order `REPLAY_SPEEDS` lists them. */
+  readonly replaySpeeds: readonly HTMLButtonElement[];
+  readonly replayRestart: HTMLButtonElement;
+  readonly replayExit: HTMLButtonElement;
   readonly playButton: HTMLButtonElement;
   readonly restartButton: HTMLButtonElement;
   readonly helpButton: HTMLButtonElement;
@@ -359,10 +380,84 @@ function overlayMarkup(): string {
         </label>
       </div>
       <button type="button" class="button button--primary" data-overlay-button>Play</button>
+      <!--
+        The two things you can do with a finished run besides playing another
+        one: watch it, and hand it to somebody. Both are hidden until there is
+        a run to watch, and the share button turns into an honest sentence when
+        the run is too long to fit in a link.
+      -->
+      <div class="overlay__actions" data-overlay-actions hidden>
+        <button type="button" class="button button--quiet" data-overlay-replay>
+          Watch replay
+        </button>
+        <button type="button" class="button button--quiet" data-overlay-share>
+          Copy replay link
+        </button>
+      </div>
       <button type="button" class="button button--quiet" data-overlay-help hidden>
         How to play
       </button>
+      <!--
+        The clipboard's fallback, the same arrangement the daily block uses and
+        for the same reason: the clipboard is a permission, not a guarantee.
+        A textarea rather than an input, because a URL this long deserves more
+        than one line to be selected in.
+
+        (No backticks in this comment, and none in any other markup comment
+        here: a backtick inside an HTML comment inside a template literal ends
+        the template.)
+      -->
+      <div class="share" data-share-fallback hidden>
+        <label class="share__label" for="share-link">Copy this link</label>
+        <textarea class="share__text" id="share-link" data-share-text rows="3" readonly></textarea>
+      </div>
     </div>
+  `;
+}
+
+/**
+ * The replay bar.
+ *
+ * A row of its own under the actions, never a floating panel over the well: the
+ * whole point of a replay is watching the field, and a control strip that
+ * covered any of it would be self-defeating. It follows the update notice's
+ * pattern — a real `<section>` with a label, so its contents are inside a
+ * landmark rather than orphaned, and `hidden` when there is nothing to watch.
+ *
+ * Every control is a real button. The speed picker carries `aria-pressed` the
+ * way the mode picker does, so "currently 2×" is a fact rather than a colour.
+ */
+function replayBarMarkup(): string {
+  const speeds = REPLAY_SPEEDS.map(
+    (speed) =>
+      `<button
+         type="button"
+         class="button button--quiet replay__speed"
+         data-replay-speed="${speed}"
+         aria-pressed="${speed === 1}"
+       >${replaySpeedLabel(speed)}</button>`,
+  ).join('');
+
+  return `
+    <section class="replay" aria-label="Replay" data-replay hidden>
+      <p class="replay__heading">
+        <span class="replay__badge">Replay</span>
+        <span class="replay__title" data-replay-title></span>
+      </p>
+      <p class="replay__detail" data-replay-detail></p>
+      <div class="replay__track" data-replay-track aria-hidden="true">
+        <div class="replay__fill" data-replay-fill></div>
+      </div>
+      <p class="replay__time" data-replay-progress></p>
+      <div class="replay__actions">
+        <button type="button" class="button button--primary" data-replay-play>Pause</button>
+        <div class="replay__speeds" role="group" aria-label="Playback speed">${speeds}</div>
+        <button type="button" class="button button--quiet" data-replay-restart>
+          Start over
+        </button>
+        <button type="button" class="button" data-replay-exit>Leave replay</button>
+      </div>
+    </section>
   `;
 }
 
@@ -502,6 +597,15 @@ export function createShell(root: HTMLElement): Shell {
             aria-labelledby="playfield-summary"
           ></canvas>
           <p class="countdown" data-countdown aria-hidden="true" hidden></p>
+          <!--
+            A replay must never be mistaken for a live game. This is the visible
+            half of saying so — the other halves are the tinted field frame that
+            the root data-replay attribute turns on, the bar under the well, and
+            the playfield's own label and description. The badge itself is
+            hidden from assistive technology: the bar below already says
+            "Replay" out loud, and twice would be twice.
+          -->
+          <p class="field-badge" data-replay-badge aria-hidden="true" hidden>Replay</p>
           ${overlayMarkup()}
         </div>
 
@@ -541,6 +645,8 @@ export function createShell(root: HTMLElement): Shell {
         <button type="button" class="button button--quiet" data-install hidden>Install</button>
       </footer>
 
+      ${replayBarMarkup()}
+
       <!--
         The update offer. A row of its own between the actions and the pad, so
         it can appear mid-game without covering anything or moving the well —
@@ -572,6 +678,7 @@ export function createShell(root: HTMLElement): Shell {
   const actions = must<HTMLElement>(root, '.game__actions');
   const pad = must<HTMLElement>(root, '[data-pad]');
   const update = must<HTMLElement>(root, '[data-update]');
+  const replay = must<HTMLElement>(root, '[data-replay]');
 
   return {
     playfield: must<HTMLElement>(root, '[data-playfield]'),
@@ -607,6 +714,23 @@ export function createShell(root: HTMLElement): Shell {
     overlayHelp: must<HTMLButtonElement>(root, '[data-overlay-help]'),
     overlayButton: must<HTMLButtonElement>(root, '[data-overlay-button]'),
     countdown: must<HTMLElement>(root, '[data-countdown]'),
+    overlayActions: must<HTMLElement>(root, '[data-overlay-actions]'),
+    overlayReplay: must<HTMLButtonElement>(root, '[data-overlay-replay]'),
+    overlayShare: must<HTMLButtonElement>(root, '[data-overlay-share]'),
+    shareFallback: must<HTMLElement>(root, '[data-share-fallback]'),
+    shareText: must<HTMLTextAreaElement>(root, '[data-share-text]'),
+    replayBadge: must<HTMLElement>(root, '[data-replay-badge]'),
+    replayBar: replay,
+    replayTitle: must<HTMLElement>(root, '[data-replay-title]'),
+    replayDetail: must<HTMLElement>(root, '[data-replay-detail]'),
+    replayFill: must<HTMLElement>(root, '[data-replay-fill]'),
+    replayProgress: must<HTMLElement>(root, '[data-replay-progress]'),
+    replayPlay: must<HTMLButtonElement>(root, '[data-replay-play]'),
+    replaySpeeds: REPLAY_SPEEDS.map((speed) =>
+      must<HTMLButtonElement>(root, `[data-replay-speed="${speed}"]`),
+    ),
+    replayRestart: must<HTMLButtonElement>(root, '[data-replay-restart]'),
+    replayExit: must<HTMLButtonElement>(root, '[data-replay-exit]'),
     playButton: must<HTMLButtonElement>(root, '[data-play]'),
     restartButton: must<HTMLButtonElement>(root, '[data-restart]'),
     helpButton: must<HTMLButtonElement>(root, '[data-help-open]'),
@@ -637,6 +761,6 @@ export function createShell(root: HTMLElement): Shell {
     helpDone: must<HTMLButtonElement>(root, '[data-help-done]'),
     // The live region is deliberately *not* here: an announcement must still
     // reach the player while a dialog has the rest of the page inert.
-    background: [header, body, actions, update, pad],
+    background: [header, body, actions, replay, update, pad],
   };
 }

@@ -19,11 +19,15 @@ import {
   GAME_MODES,
   applyInput,
   createGame,
+  createRecorder,
   dailySeed,
+  decodeShare,
+  readShareFragment,
   update,
   type GameInput,
   type GameMode,
   type GameState,
+  type ReplayLog,
 } from './engine';
 import { createGameAudio } from './ui/audio';
 import {
@@ -56,6 +60,8 @@ import {
 } from './ui/hud';
 import { createKeyboardInput, normalizeKey, type ActionId } from './ui/input';
 import { createLoop } from './ui/loop';
+import { REPLAY_SPEEDS, createReplayViewer, type ReplayRequest } from './ui/replay';
+import { buildShareLink, runShareText } from './ui/share';
 import { createMotionPreference } from './ui/motion';
 import { refreshPalette, watchPalette } from './ui/palette';
 import { createInstallPrompt, registerServiceWorker, syncThemeColor } from './ui/pwa';
@@ -206,6 +212,34 @@ function runOptions(kind: RunKind): { seed: number; startLevel: number; mode: Ga
 let state: GameState = createGame(runOptions('free'));
 
 /**
+ * The tape.
+ *
+ * An observer, and nothing more: it is handed the run clock and the input by
+ * the two lines below that were about to apply them, and it hands nothing back.
+ * There is no path from the recorder into the engine — no wrapped `update`, no
+ * adjusted delta — which is what makes "recording does not change the game" a
+ * fact about the shape of the code rather than a promise.
+ *
+ * `engine/replay.test.ts` proves it anyway, by playing the same script twice.
+ */
+const recorder = createRecorder();
+
+/** A finished run, ready to be watched or handed to somebody. */
+interface RecordedRun {
+  readonly seed: number;
+  readonly startLevel: number;
+  readonly mode: GameMode;
+  readonly log: ReplayLog;
+}
+
+/**
+ * The run that just ended, on tape, or `null` when there is nothing to watch —
+ * before the first game over, after a restart, or when the run was so long the
+ * recorder hit its cap and stopped.
+ */
+let lastRun: RecordedRun | null = null;
+
+/**
  * What the last run did to the personal bests, or `null` before the first game
  * over of this visit. The game-over panel is written from it.
  */
@@ -218,6 +252,29 @@ let lastResult: StatsUpdate | null = null;
 let dailyNote: string | null = null;
 
 /**
+ * The replay viewer.
+ *
+ * It owns a `ReplayPlayer` and a speed and nothing else; the engine steps the
+ * run, the renderer paints it, and this file moves text into elements. That
+ * division is the whole reason a replay was a day's work rather than a rewrite:
+ * `(seed, ordered list of calls) -> state` was already true, and a `GameState`
+ * was already the only thing the renderer knew how to draw.
+ *
+ * Declared up here with the rest of the mutable state because `draw` reads it,
+ * and `draw` runs long before the block of listeners further down.
+ */
+const replayViewer = createReplayViewer();
+
+/**
+ * A note on the start screen: a link that did not work, or one that did.
+ *
+ * The live region says it too, but an announcement is not a message — somebody
+ * who clicked a friend's link and got a start screen deserves a sentence they
+ * can actually read about why.
+ */
+let startNotice: string | null = null;
+
+/**
  * Set when a run has just ended, so the loop can put focus on "Play again" as
  * soon as the panel is in the DOM. Focus cannot move to it from inside
  * `setState`: the overlay is still hidden until the next `draw`.
@@ -225,15 +282,21 @@ let dailyNote: string | null = null;
 let focusPlayAgain = false;
 
 function draw(): void {
+  // A replay is an ordinary snapshot going through the ordinary renderer: the
+  // *only* difference here is which snapshot. That is the dividend of having
+  // made the renderer a pure painter — there is no replay code in it at all.
+  const replaying = replayViewer.active();
+  const shown = replayViewer.state() ?? state;
+
   // The attract screen's drifting pieces belong to the one state that has no
-  // game going on behind the panel.
-  effects.setAttract(state.status === 'ready');
-  board.render(state);
-  next.render({ kinds: state.next.slice(0, PREVIEW_COUNT) });
-  hold.render({ kinds: [state.hold], dimmed: state.holdLocked });
+  // game going on behind the panel — and a replay is not that state.
+  effects.setAttract(!replaying && state.status === 'ready');
+  board.render(shown);
+  next.render({ kinds: shown.next.slice(0, PREVIEW_COUNT) });
+  hold.render({ kinds: [shown.hold], dimmed: shown.holdLocked });
   // The overlay doubles as the help text, so it needs to know which controls
   // the player actually has in front of them.
-  hud.render(state, {
+  hud.render(shown, {
     touch: touch.touchLikely(),
     score: effects.displayScore(),
     countdown: countdown.digit(),
@@ -241,10 +304,37 @@ function draw(): void {
     result: lastResult,
     startLevel: store.get('startLevel'),
     dailyNote,
+    notice: startNotice,
+    canReplay: lastRun !== null,
+    replay: replaying,
     // A dialog is the conversation while it is open; two "Paused" panels
-    // stacked on top of each other is one too many.
-    suppressOverlay: pauseMenu.isOpen() || helpPanel.isOpen(),
+    // stacked on top of each other is one too many. A replay owns the well
+    // outright, and the bar under it is that conversation.
+    suppressOverlay: replaying || pauseMenu.isOpen() || helpPanel.isOpen(),
   });
+
+  if (replaying) {
+    renderReplayBar();
+    // The footer's primary button belongs to the live game, and during a replay
+    // there is not one. Saying what it now does beats leaving it saying "Pause".
+    shell.playButton.textContent = 'Leave replay';
+  }
+}
+
+/**
+ * Put a brand-new game on the field and start a fresh tape.
+ *
+ * Every path that deals a different game goes through here — the restart
+ * button, the mode picker, the level picker — because a tape that survived a
+ * re-deal would be a recording of one run played against the seed of another.
+ */
+function dealGame(next: GameState): void {
+  recorder.reset();
+  lastRun = null;
+  // Whatever the start screen was explaining is answered by a new game.
+  startNotice = null;
+  hideShareFallback();
+  setState(next);
 }
 
 /** Take the new snapshot and say anything worth saying about how we got here. */
@@ -305,6 +395,18 @@ function setState(nextState: GameState): void {
       // run, never at the start of it, so a refresh, a crash or a closed laptop
       // mid-game costs the player nothing.
       recordDailyRun(event.score, event.lines, event.level, event.durationMs);
+      // The tape, sealed. A truncated one is deliberately *not* offered: it is
+      // a correct prefix of the run rather than the whole of it, and a "watch
+      // replay" that stopped forty seconds early would be worse than no button.
+      recorder.mark(state.elapsedMs);
+      lastRun = recorder.truncated()
+        ? null
+        : {
+            seed: state.seed,
+            startLevel: state.startLevel,
+            mode: state.mode,
+            log: recorder.log(),
+          };
       focusPlayAgain = true;
     } else if (event.type === 'hold') {
       audio.play('rotate');
@@ -323,6 +425,9 @@ function setState(nextState: GameState): void {
 }
 
 function send(input: GameInput): void {
+  // Before, not after: the log records the clock as it stood when the player
+  // pressed the key, which is the moment a replay has to press it again.
+  recorder.record(state.elapsedMs, input.type);
   setState(applyInput(state, input));
 }
 
@@ -336,6 +441,9 @@ function send(input: GameInput): void {
 function startFreshGame(): void {
   effects.clear();
   countdown.cancel();
+  // A replay is a thing you are watching, not a thing you are playing; dealing
+  // a game is the clearest possible statement that you are done watching.
+  leaveReplay(false);
   // A restart is not a resume: whatever menu asked for it should close without
   // counting the player back into a game that no longer exists.
   closeMenus();
@@ -347,8 +455,7 @@ function startFreshGame(): void {
   // playing again — stays on the day's seed, and becomes a practice run once
   // the attempt has been spent. Free play deals a brand-new sequence.
   runKind = resolveRunKind(runKind);
-  setState(createGame(runOptions(runKind)));
-  hideShareFallback();
+  dealGame(createGame(runOptions(runKind)));
   send({ type: 'resume' });
   draw();
   shell.playfield.focus();
@@ -403,6 +510,33 @@ function dispatch(action: ActionId): void {
   // keyboard layer treats every key inside a dialog as the dialog's. This is
   // the belt to those braces rather than the only guard.
   if (menusOpen()) {
+    return;
+  }
+
+  // A replay is watched, not played. The four keys that still mean something
+  // are the four a video player would have: Escape (and P) leave, Space is
+  // play/pause, R starts it over, and help is help. Everything else — every
+  // move, turn and drop — is deliberately swallowed, because pressing left
+  // during a recording of somebody else's game should do nothing at all.
+  if (replayViewer.active()) {
+    switch (action) {
+      case 'togglePause':
+        leaveReplay(true);
+        break;
+      case 'hardDrop':
+        replayViewer.togglePlay();
+        draw();
+        break;
+      case 'restart':
+        replayViewer.restart();
+        draw();
+        break;
+      case 'help':
+        toggleHelp();
+        break;
+      default:
+        break;
+    }
     return;
   }
 
@@ -672,9 +806,10 @@ function setDailyText(element: HTMLElement, text: string): void {
   }
 }
 
-/** Put the clipboard fallback away. Called whenever the panel changes meaning. */
+/** Put the clipboard fallbacks away. Called whenever the panel changes meaning. */
 function hideShareFallback(): void {
   shell.dailyFallback.hidden = true;
+  shell.shareFallback.hidden = true;
 }
 
 /**
@@ -744,7 +879,7 @@ shell.dailyCopy.addEventListener('click', () => {
   // Typed as always present, and absent in real browsers over plain HTTP.
   const clipboard: Clipboard | undefined = navigator.clipboard;
   if (clipboard === undefined) {
-    offerManualCopy(text);
+    offerDailyCopy(text);
     return;
   }
   void clipboard.writeText(text).then(
@@ -753,7 +888,7 @@ shell.dailyCopy.addEventListener('click', () => {
       hud.announce('Result copied to the clipboard.');
     },
     () => {
-      offerManualCopy(text);
+      offerDailyCopy(text);
     },
   );
 });
@@ -764,12 +899,269 @@ function shareUrl(): string {
   return `${origin}${pathname}`;
 }
 
-function offerManualCopy(text: string): void {
+/**
+ * The daily result's own fallback box, which lives inside the daily block
+ * rather than under the panel's buttons — it belongs to that section, and the
+ * section is hidden on every run that was not a daily one.
+ */
+function offerDailyCopy(text: string): void {
   shell.dailyShare.value = text;
   shell.dailyFallback.hidden = false;
   shell.dailyShare.focus();
   shell.dailyShare.select();
   hud.announce('Clipboard unavailable. The result is in the box below, ready to copy.');
+}
+
+// -- watching a run back ----------------------------------------------------
+
+/** Write `text` into `element` only when it differs from what is there. */
+function setBarText(element: HTMLElement, text: string): void {
+  if (element.textContent !== text) {
+    element.textContent = text;
+  }
+}
+
+/** Push the viewer's caption into the bar. Called from `draw`, so per frame. */
+function renderReplayBar(): void {
+  const caption = replayViewer.caption();
+  if (caption === null) {
+    return;
+  }
+  setBarText(shell.replayTitle, caption.title);
+  setBarText(shell.replayDetail, caption.detail);
+  setBarText(shell.replayProgress, caption.progress);
+  setBarText(shell.replayPlay, caption.playLabel);
+  const width = `${(caption.fraction * 100).toFixed(2)}%`;
+  if (shell.replayFill.style.width !== width) {
+    shell.replayFill.style.width = width;
+  }
+  const speed = replayViewer.speed();
+  for (const [index, button] of shell.replaySpeeds.entries()) {
+    const pressed = String(REPLAY_SPEEDS[index] === speed);
+    if (button.getAttribute('aria-pressed') !== pressed) {
+      button.setAttribute('aria-pressed', pressed);
+    }
+  }
+}
+
+/**
+ * Start watching a run.
+ *
+ * The three tells that this is not a live game all go on here: the root's
+ * `data-replay` (which tints the field frame), the badge in the corner, and the
+ * playfield's own accessible name. None of them is only a colour, and the last
+ * one is the one that matters most.
+ */
+function openReplay(request: ReplayRequest): void {
+  effects.clear();
+  countdown.cancel();
+  closeMenus();
+  hideShareFallback();
+  // Keys held down when the replay opened belong to the game that has just
+  // stopped being on screen.
+  input.releaseAll();
+  touch.releaseAll();
+
+  replayViewer.open(request);
+  document.documentElement.dataset['replay'] = 'on';
+  shell.replayBadge.hidden = false;
+  shell.replayBar.hidden = false;
+  shell.playfield.setAttribute('aria-label', 'Replay playfield');
+  draw();
+  shell.replayPlay.focus();
+
+  const caption = replayViewer.caption();
+  if (caption !== null) {
+    hud.announce(caption.announcement);
+  }
+}
+
+/** Stop watching, and put the cabinet back the way it was. */
+function leaveReplay(focusWell: boolean): void {
+  if (!replayViewer.active()) {
+    return;
+  }
+  const shared = replayViewer.origin() === 'link';
+  replayViewer.close();
+  delete document.documentElement.dataset['replay'];
+  shell.replayBadge.hidden = true;
+  shell.replayBar.hidden = true;
+  shell.playfield.setAttribute('aria-label', 'Playfield');
+  effects.clear();
+  // The address bar goes back to the plain page: a fragment left behind would
+  // replay the same run on every reload, which is not what "play" should mean.
+  clearShareFragment();
+  if (shared) {
+    startNotice = 'That was somebody else’s run. Press Play for one of your own.';
+  }
+  draw();
+  if (focusWell) {
+    shell.playfield.focus();
+    hud.announce('Left the replay.');
+  }
+}
+
+/** Take the replay out of the address bar, if the browser will let us. */
+function clearShareFragment(): void {
+  if (window.location.hash === '') {
+    return;
+  }
+  try {
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+  } catch {
+    // Some embedded browsers refuse `replaceState`. A stale fragment is a
+    // cosmetic problem; a thrown exception on the way out of a replay is not.
+  }
+}
+
+shell.overlayReplay.addEventListener('click', () => {
+  if (lastRun === null) {
+    return;
+  }
+  openReplay({ ...lastRun, origin: 'own' });
+});
+
+shell.replayPlay.addEventListener('click', () => {
+  replayViewer.togglePlay();
+  draw();
+});
+
+shell.replayRestart.addEventListener('click', () => {
+  replayViewer.restart();
+  draw();
+});
+
+shell.replayExit.addEventListener('click', () => leaveReplay(true));
+
+for (const [index, button] of shell.replaySpeeds.entries()) {
+  const speed = REPLAY_SPEEDS[index];
+  if (speed === undefined) {
+    continue;
+  }
+  button.addEventListener('click', () => {
+    replayViewer.setSpeed(speed);
+    draw();
+    hud.announce(`Replay speed ${speed} times.`);
+  });
+}
+
+// -- handing a run to somebody ----------------------------------------------
+
+/**
+ * Put the whole run in a link.
+ *
+ * The run goes in the **fragment**, which is the half of a URL a browser never
+ * sends to a server — and there is no server. Encoding is asynchronous because
+ * `CompressionStream` is; the button is disabled for the handful of
+ * milliseconds it takes, so a double click cannot produce two links.
+ *
+ * A run too long to fit gets an honest sentence and the score-only line from
+ * the daily challenge instead. A link that arrives cut in half by a chat client
+ * would be worse than no link at all, and quietly producing one is exactly the
+ * kind of thing a player only discovers when a friend tells them it did not
+ * work.
+ */
+shell.overlayShare.addEventListener('click', () => {
+  const run = lastRun;
+  if (run === null) {
+    return;
+  }
+  shell.overlayShare.disabled = true;
+  void buildShareLink(shareUrl(), {
+    mode: run.mode,
+    seed: run.seed,
+    startLevel: run.startLevel,
+    log: run.log,
+  })
+    .then((link) => {
+      if (link.ok) {
+        copyToClipboard(link.url, 'Replay link copied to the clipboard.');
+        return;
+      }
+      const fallback = runShareText({
+        mode: state.mode,
+        score: state.score,
+        lines: state.lines,
+        level: state.level,
+        durationMs: state.elapsedMs,
+        url: shareUrl(),
+      });
+      offerManualCopy(
+        fallback,
+        'That run is too long to fit in a link. Here is the score instead, ready to copy.',
+      );
+    })
+    .catch(() => {
+      hud.announce('The replay link could not be made.');
+    })
+    .finally(() => {
+      shell.overlayShare.disabled = false;
+    });
+});
+
+/**
+ * Copy some text, with a way out when the clipboard says no.
+ *
+ * The same reasoning as the daily challenge's copy button, and now the same
+ * code: `navigator.clipboard` is missing entirely over plain HTTP and rejects
+ * when the permission is denied or the click did not look like a gesture, so
+ * the failure path is Tuesday rather than an exotic case.
+ */
+function copyToClipboard(text: string, success: string): void {
+  const clipboard: Clipboard | undefined = navigator.clipboard;
+  if (clipboard === undefined) {
+    offerManualCopy(text, 'Clipboard unavailable. The link is in the box below, ready to copy.');
+    return;
+  }
+  void clipboard.writeText(text).then(
+    () => {
+      hideShareFallback();
+      hud.announce(success);
+    },
+    () => {
+      offerManualCopy(text, 'Clipboard unavailable. The link is in the box below, ready to copy.');
+    },
+  );
+}
+
+function offerManualCopy(text: string, message: string): void {
+  shell.shareText.value = text;
+  shell.shareFallback.hidden = false;
+  shell.shareText.focus();
+  shell.shareText.select();
+  hud.announce(message);
+}
+
+/**
+ * A run somebody sent us.
+ *
+ * The fragment is a stranger's input and is treated like one: `decodeShare` is
+ * total, so the worst a hostile, truncated or simply ancient link can do is
+ * produce a sentence and an ordinary start screen. Nothing here can throw and
+ * nothing here allocates on the strength of a number it read out of the URL —
+ * see `engine/share.ts`, which is where all of that is enforced and tested.
+ */
+function openSharedRun(): boolean {
+  const fragment = readShareFragment(window.location.hash);
+  if (fragment === null) {
+    return false;
+  }
+  const result = decodeShare(fragment);
+  if (!result.ok) {
+    clearShareFragment();
+    startNotice = result.message;
+    hud.announce(`${result.message} Starting a new game instead.`);
+    draw();
+    return false;
+  }
+  openReplay({
+    seed: result.run.seed,
+    startLevel: result.run.startLevel,
+    mode: result.run.mode,
+    log: result.run.log,
+    origin: 'link',
+  });
+  return true;
 }
 
 shell.pauseResume.addEventListener('click', () => pauseMenu.close());
@@ -810,10 +1202,31 @@ function soundForUrgency(): void {
 
 const loop = createLoop({
   onFrame(deltaMs) {
+    // A replay owns the frame outright: no input, no countdown, and above all
+    // no `update` on the live game — the run behind the viewer is exactly where
+    // the player left it, and watching a recording must not cost them a piece.
+    if (replayViewer.active()) {
+      const previousBoard = replayViewer.previousBoard();
+      replayViewer.update(deltaMs);
+      const shown = replayViewer.state();
+      if (shown !== null && previousBoard !== null) {
+        // The same events, through the same effects layer. A replay gets its
+        // line-clear bursts for free; it deliberately gets no *sound*, because
+        // four minutes of cues at 4x is not a celebration, it is a fire alarm.
+        effects.observe(replayViewer.events(), previousBoard);
+        effects.update(deltaMs, shown.score);
+      }
+      draw();
+      return;
+    }
+
     input.update(deltaMs);
     touch.update(deltaMs);
     countdown.update(deltaMs);
     setState(update(state, deltaMs));
+    // One number, once a frame, after the fact. The recorder cannot change what
+    // the engine just did because it runs after the engine has done it.
+    recorder.mark(state.elapsedMs);
     soundForUrgency();
     // After the state, so the score count-up is always chasing a current
     // target, and with the same delta the engine got.
@@ -833,6 +1246,10 @@ const loop = createLoop({
 
 /** The play/pause button and the overlay button both mean "carry on". */
 function primaryAction(): void {
+  if (replayViewer.active()) {
+    leaveReplay(true);
+    return;
+  }
   if (state.status === 'over') {
     startFreshGame();
     return;
@@ -996,7 +1413,7 @@ for (const [index, button] of shell.modeButtons.entries()) {
     // readout beside the well is already showing the mode's own clock and the
     // panel is already quoting the right personal best.
     if (state.status === 'ready') {
-      setState(createGame({ seed: state.seed, startLevel: store.get('startLevel'), mode }));
+      dealGame(createGame({ seed: state.seed, startLevel: store.get('startLevel'), mode }));
     }
     hud.announce(`${MODE_LABELS[mode]}. ${MODE_BLURBS[mode]}.`);
     draw();
@@ -1016,7 +1433,7 @@ shell.startLevel.addEventListener('change', () => {
   store.set('startLevel', level);
   shell.startLevel.value = String(level);
   if (state.status === 'ready') {
-    setState(createGame({ seed: state.seed, startLevel: level, mode: store.get('mode') }));
+    dealGame(createGame({ seed: state.seed, startLevel: level, mode: store.get('mode') }));
   }
   hud.announce(level === 1 ? 'Starting on level 1.' : `Starting on level ${level}.`);
   draw();
@@ -1039,7 +1456,7 @@ shell.startLevel.addEventListener('change', () => {
 const PLAY_AGAIN_KEYS: ReadonlySet<string> = new Set(['Enter', 'R']);
 
 window.addEventListener('keydown', (event) => {
-  if (state.status !== 'over' || menusOpen() || event.defaultPrevented) {
+  if (state.status !== 'over' || menusOpen() || replayViewer.active() || event.defaultPrevented) {
     return;
   }
   if (event.metaKey || event.altKey || event.ctrlKey) {
@@ -1061,6 +1478,29 @@ window.addEventListener('keydown', (event) => {
   startFreshGame();
 });
 
+/**
+ * Escape leaves a replay, from wherever focus happens to be.
+ *
+ * With the well focused, Escape already arrives as a bound action and
+ * `dispatch` handles it — and prevents the default, which is the seam that
+ * stops this firing a second time. What this fills is the other case: focus on
+ * one of the bar's own buttons, where the keyboard layer deliberately leaves
+ * keys inside controls alone. Exactly the arrangement "play again" uses.
+ */
+window.addEventListener('keydown', (event) => {
+  if (!replayViewer.active() || menusOpen() || event.defaultPrevented) {
+    return;
+  }
+  if (event.metaKey || event.altKey || event.ctrlKey) {
+    return;
+  }
+  if (normalizeKey(event.key) !== 'Escape') {
+    return;
+  }
+  event.preventDefault();
+  leaveReplay(true);
+});
+
 // A hidden tab should not keep playing behind the player's back. The loop
 // suspends itself too, but pausing the game is what makes the return honest.
 document.addEventListener('visibilitychange', () => {
@@ -1070,6 +1510,10 @@ document.addEventListener('visibilitychange', () => {
     // A count that resumed the game while nobody was looking would be worse
     // than no count at all.
     countdown.cancel();
+    if (replayViewer.active() && replayViewer.playing()) {
+      replayViewer.togglePlay();
+      draw();
+    }
     if (state.status === 'playing') {
       send({ type: 'pause' });
       draw();
@@ -1088,9 +1532,20 @@ renderDaily();
 loop.start();
 draw();
 
+// A link in the address bar is somebody handing over a run to watch. It opens
+// the viewer instead of a game — over the start screen, so leaving it lands on
+// the panel that offers one.
+const watchingSharedRun = openSharedRun();
+
 // A player who has never been here before gets the controls without having to
 // go looking for them. Everyone else lands on the start screen's Play button.
-if (store.get('seenHelp')) {
+//
+// Neither happens to somebody who arrived on a friend's link: the replay is
+// already playing and already has focus, and a help panel thrown over it would
+// be answering a question nobody asked. Help is a button away.
+if (watchingSharedRun) {
+  // Nothing to do — `openReplay` has already put focus on the bar.
+} else if (store.get('seenHelp')) {
   shell.overlayButton.focus();
 } else {
   helpPanel.open();
@@ -1117,5 +1572,23 @@ if (import.meta.env.DEV) {
     result: () => lastResult,
     daily: () => ({ today, kind: runKind, record: store.daily(), note: dailyNote }),
     startDaily: startDailyRun,
+    recorder: () => ({ entries: recorder.size(), truncated: recorder.truncated() }),
+    lastRun: () => lastRun,
+    replay: () => ({
+      active: replayViewer.active(),
+      playing: replayViewer.playing(),
+      done: replayViewer.done(),
+      speed: replayViewer.speed(),
+      origin: replayViewer.origin(),
+      caption: replayViewer.caption(),
+      result: replayViewer.result(),
+      state: replayViewer.state(),
+    }),
+    watchLastRun: () => {
+      if (lastRun !== null) {
+        openReplay({ ...lastRun, origin: 'own' });
+      }
+    },
+    leaveReplay: () => leaveReplay(false),
   });
 }
