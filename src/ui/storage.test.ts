@@ -419,8 +419,42 @@ describe('migration', () => {
     expect(migrated.daily).toEqual(defaultDaily());
   });
 
-  it('walks a version 1 store all the way to the daily era in one go', () => {
-    // Four steps in the table, run back to back. The oldest store there is
+  it('carries a version 5 store forward on the default controls', () => {
+    // The build before the settings dialog. Everybody who used it played on
+    // the shipped keys and the shipped handling, because there was no way to
+    // change either — so the defaults are not a fallback here, they are the
+    // truth about what that player had. Nothing else moves.
+    const migrated = migrate({
+      ...version3(),
+      version: 5,
+      daily: defaultDaily(),
+      settings: { ...(version3()['settings'] as object), installDismissed: true },
+    });
+
+    expect(migrated.version).toBe(SCHEMA_VERSION);
+    expect(migrated.settings.bindings).toEqual(defaultKeyMap());
+    expect(migrated.settings.handling).toEqual(DEFAULT_HANDLING);
+    // And every number they had came with them.
+    expect(migrated.settings.installDismissed).toBe(true);
+    expect(migrated.settings.mode).toBe('sprint');
+    expect(migrated.stats.modes.marathon.base.score).toBe(12_345);
+  });
+
+  it('keeps a customised set of controls when a newer store is read back', () => {
+    // The other direction: a store already at the current version has real
+    // bindings in it, and they have to survive the round trip untouched.
+    const bindings = { ...defaultKeyMap(), hardDrop: [' ', 'Q'] };
+    const migrated = migrate({
+      version: SCHEMA_VERSION,
+      settings: { bindings, handling: { dasMs: 90, arrMs: 0, softDropMs: 20 } },
+    });
+
+    expect(migrated.settings.bindings).toEqual(bindings);
+    expect(migrated.settings.handling).toEqual({ dasMs: 90, arrMs: 0, softDropMs: 20 });
+  });
+
+  it('walks a version 1 store all the way to the settings era in one go', () => {
+    // Every step in the table, run back to back. The oldest store there is
     // still has to arrive as something this build can read.
     const migrated = migrate({ version: 1, settings: { pad: 'on' } });
 
