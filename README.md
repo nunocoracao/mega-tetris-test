@@ -281,7 +281,7 @@ duplicate.
 
 ## Testing
 
-520 tests, about three seconds.
+Around 540 tests, in about three seconds.
 
 The engine carries a coverage floor because it is the part that must not rot.
 The browser layer does not, deliberately: the tests there cover the **pure**
