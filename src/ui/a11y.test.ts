@@ -440,3 +440,63 @@ describe('modal behaviour', () => {
     expect(shell.status.closest('[inert]')).toBeNull();
   });
 });
+
+/**
+ * The two affordances the installable cabinet added.
+ *
+ * Both are ordinary page content on purpose. The update notice is the one worth
+ * spelling out: it would have been easy to make it a toast over the well and a
+ * second live region, and both would have been wrong — a player mid-run has to
+ * be able to look at it, decide it can wait, and carry on.
+ */
+describe('the install offer and the update notice', () => {
+  it('starts with both put away', () => {
+    expect(shell.installButton.hidden).toBe(true);
+    expect(shell.updateBar.hidden).toBe(true);
+  });
+
+  it('puts the install button among the other footer actions', () => {
+    expect(shell.installButton.closest('footer')).toBe(root.querySelector('footer'));
+  });
+
+  it('offers the update as real buttons that take focus', () => {
+    shell.updateBar.hidden = false;
+
+    for (const button of [shell.updateReload, shell.updateDismiss]) {
+      expect(button.tagName).toBe('BUTTON');
+      expect(button.textContent?.trim()).not.toBe('');
+      button.focus();
+      expect(document.activeElement).toBe(button);
+    }
+  });
+
+  it('adds no second live region', () => {
+    // The game has one polite region and a high bar for what reaches it; the
+    // update announcement goes through that one like everything else.
+    shell.updateBar.hidden = false;
+
+    expect(shell.updateBar.getAttribute('aria-live')).toBeNull();
+    expect(root.querySelectorAll('[aria-live]')).toHaveLength(1);
+  });
+
+  it('sits outside the playfield rather than over it', () => {
+    expect(shell.playfield.contains(shell.updateBar)).toBe(false);
+    expect(shell.updateBar.contains(shell.playfield)).toBe(false);
+    // And after the footer, so tabbing to it never means passing back through
+    // the game.
+    expect(
+      shell.updateBar.compareDocumentPosition(shell.playfield) & Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+  });
+
+  it('goes inert with everything else while a dialog is open', () => {
+    expect(shell.background).toContain(shell.updateBar);
+  });
+
+  it('has no violations with both showing', async () => {
+    shell.installButton.hidden = false;
+    shell.updateBar.hidden = false;
+
+    expect(report(await audit())).toBe('');
+  });
+});

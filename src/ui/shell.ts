@@ -89,6 +89,19 @@ export interface Shell {
   readonly playButton: HTMLButtonElement;
   readonly restartButton: HTMLButtonElement;
   readonly helpButton: HTMLButtonElement;
+  /**
+   * Offers to install the cabinet. Hidden unless the browser has actually said
+   * there is an installation to offer — see `ui/pwa.ts`.
+   */
+  readonly installButton: HTMLButtonElement;
+  /**
+   * "A new version is ready." A row under the actions rather than a banner over
+   * the well: a player mid-run should be able to ignore it, and nothing that
+   * covers the field can be ignored.
+   */
+  readonly updateBar: HTMLElement;
+  readonly updateReload: HTMLButtonElement;
+  readonly updateDismiss: HTMLButtonElement;
   /** The on-screen control pad. Hidden or shown by `ui/touch.ts`. */
   readonly touchPad: HTMLElement;
   /** Cycles the pad between auto, forced on and forced off. */
@@ -520,7 +533,28 @@ export function createShell(root: HTMLElement): Shell {
         <button type="button" class="button button--primary" data-play>Play</button>
         <button type="button" class="button" data-restart>Restart</button>
         <button type="button" class="button" data-help-open>Help</button>
+        <!--
+          Beside the other actions, in the tab order, and hidden until the
+          browser offers an installation. No banner, no modal, nothing over
+          the well.
+        -->
+        <button type="button" class="button button--quiet" data-install hidden>Install</button>
       </footer>
+
+      <!--
+        The update offer. A row of its own between the actions and the pad, so
+        it can appear mid-game without covering anything or moving the well —
+        the field is sized by max-height, and gives way by a few pixels.
+        Deliberately *not* a live region: the game has exactly one, and the
+        announcement goes through it like every other one.
+      -->
+      <section class="update" aria-label="New version" data-update hidden>
+        <p class="update__text">A new version is ready.</p>
+        <div class="update__actions">
+          <button type="button" class="button button--primary" data-update-reload>Reload</button>
+          <button type="button" class="button button--quiet" data-update-dismiss>Not now</button>
+        </div>
+      </section>
 
       <section class="pad" aria-label="On-screen controls" data-pad hidden>
         ${padMarkup()}
@@ -537,6 +571,7 @@ export function createShell(root: HTMLElement): Shell {
   const body = must<HTMLElement>(root, '.game__body');
   const actions = must<HTMLElement>(root, '.game__actions');
   const pad = must<HTMLElement>(root, '[data-pad]');
+  const update = must<HTMLElement>(root, '[data-update]');
 
   return {
     playfield: must<HTMLElement>(root, '[data-playfield]'),
@@ -575,6 +610,10 @@ export function createShell(root: HTMLElement): Shell {
     playButton: must<HTMLButtonElement>(root, '[data-play]'),
     restartButton: must<HTMLButtonElement>(root, '[data-restart]'),
     helpButton: must<HTMLButtonElement>(root, '[data-help-open]'),
+    installButton: must<HTMLButtonElement>(root, '[data-install]'),
+    updateBar: update,
+    updateReload: must<HTMLButtonElement>(root, '[data-update-reload]'),
+    updateDismiss: must<HTMLButtonElement>(root, '[data-update-dismiss]'),
     touchPad: pad,
     padToggle: must<HTMLButtonElement>(root, '[data-pad-toggle]'),
     soundToggle: must<HTMLButtonElement>(root, '[data-sound-toggle]'),
@@ -598,6 +637,6 @@ export function createShell(root: HTMLElement): Shell {
     helpDone: must<HTMLButtonElement>(root, '[data-help-done]'),
     // The live region is deliberately *not* here: an announcement must still
     // reach the player while a dialog has the rest of the page inert.
-    background: [header, body, actions, pad],
+    background: [header, body, actions, update, pad],
   };
 }

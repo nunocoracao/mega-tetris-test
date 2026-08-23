@@ -1,15 +1,22 @@
 /// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 
+import { megaTetrisPwa } from './build/plugin';
+
 export default defineConfig({
   // Relative base so the built bundle works from any static path.
   base: './',
+  // The manifest, the icon set and the service worker — all generated from the
+  // palette and the bundle rather than checked in. See `build/plugin.ts`.
+  plugins: [megaTetrisPwa()],
   test: {
     // `node`, deliberately: it is what stops a DOM reference sneaking into the
     // engine. The one file that genuinely needs a document — the accessibility
     // audit — opts in with a `@vitest-environment jsdom` docblock.
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    // `build/` holds the generators for the manifest, the icons and the
+    // service worker; their tests live beside them and run in the same suite.
+    include: ['src/**/*.test.ts', 'build/**/*.test.ts'],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],

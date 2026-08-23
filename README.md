@@ -1,8 +1,9 @@
 # Mega Tetris
 
 A cheerful falling-block puzzle game that lives entirely in the browser — a
-tiny arcade cabinet at a URL. No backend, no accounts, no install: three static
-files totalling **36 KB gzipped**, and you are playing.
+tiny arcade cabinet at a URL. No backend and no accounts: three static files
+totalling **38 KB gzipped**, and you are playing. Install it and it is a cabinet
+on your home screen too, playable with the network switched off.
 
 **▶ [Play it](https://nunocoracao.github.io/mega-tetris-test/)**
 
@@ -37,8 +38,12 @@ browser.
   screen-reader description of the well, a high-contrast palette, per-piece
   shape marks so nothing depends on colour alone, and `prefers-reduced-motion`
   honoured live.
-- **Starts instantly.** No web fonts, no images, no runtime dependencies, no
-  network request after the first three.
+- **Installs, and then plays on a plane.** A manifest, an icon set drawn in this
+  repository, and a forty-line service worker that precaches the build and is
+  honest about updates: a new deploy offers you a reload rather than taking one.
+  See [Installing it](#installing-it).
+- **Starts instantly.** No web fonts, no image files, no runtime dependencies,
+  no network request after the first three.
 
 ## Getting started
 
@@ -56,7 +61,7 @@ npm run dev     # http://localhost:5173
 | `npm run dev`        | Vite dev server with hot module replacement.               |
 | `npm run build`      | Typecheck, then build the static bundle into `dist/`.      |
 | `npm run preview`    | Serve the built `dist/` locally, as a static host would.   |
-| `npm test`           | The whole suite, once. Takes about three seconds.          |
+| `npm test`           | The whole suite, once. Takes about five seconds.           |
 | `npm run test:watch` | The suite, in watch mode.                                  |
 | `npm run coverage`   | The suite plus a coverage report (`coverage/index.html`).  |
 | `npm run typecheck`  | `tsc --noEmit`, in `strict` mode.                          |
@@ -163,6 +168,74 @@ seed's contents, because spoiling the day for whoever reads it would defeat the
 point. `navigator.clipboard` is absent over plain HTTP and rejects when the
 permission is denied, so when it fails the same text appears in a labelled,
 read-only, pre-selected field instead.
+
+## Installing it
+
+The game was always three static files and no runtime dependencies, which is
+most of the work of being installable already done. What was missing was a
+manifest, an icon set and a service worker — about two hundred lines in
+`build/`, and no new dependency.
+
+**Install** appears in the footer, beside Play and Restart, and **only when the
+browser has actually offered an installation** — `beforeinstallprompt` is the
+browser saying it would have shown its own prompt, and the button is that offer
+moved somewhere it cannot cover the well. Declining it, or installing, retires
+it for good; the answer lives in the same `localStorage` key as everything else.
+On a platform with no such event — iOS, where it is *Add to Home Screen* in the
+share sheet — no button ever appears.
+
+**Offline.** The worker precaches the built bundle at install and serves it
+cache-first. It never writes to a cache while answering a request: a
+`cache.put` in a fetch handler is how a service worker ends up doing storage I/O
+in the middle of a frame, and there is nothing here worth caching
+opportunistically anyway. Everything the game needs is in the precache, so with
+the network off it starts, plays, ends and restarts exactly as it does online.
+
+**Updates, offered rather than applied.** This is the part most projects get
+wrong. A new deploy is a new precache list, a new revision and a new cache; the
+new worker installs, fills its cache, and then **waits**. The page notices it
+waiting and shows a row under the footer — *A new version is ready. Reload / Not
+now* — and does nothing else. Pressing Reload promotes the waiting worker and
+reloads onto it; pressing *Not now* puts the row away and leaves it waiting for
+the next visit. Nothing reloads underneath a run, not even when another tab
+takes the update: a controller change this page did not ask for is deliberately
+ignored.
+
+**Standalone.** With no browser chrome there is no chrome keeping the cabinet
+off the notch, so the page pays the safe-area insets itself — the on-screen pad
+sits above the home indicator rather than under it. `theme-color` follows the
+palette, so the status bar changes with the contrast setting rather than leaving
+a seam across the top of the phone. Nothing in the game ever depended on a back
+button, an address bar or the word "tab".
+
+**In development none of this happens.** `registerServiceWorker` is a no-op
+outside a production bundle and the whole body folds out of the dev build, so
+`npm run dev` still hot-reloads; the dev server answers `/sw.js` with a 404, and
+serves the manifest and icons out of memory so they are checkable without a
+build.
+
+### The icon
+
+Drawn here, in `build/icon.ts`: four blocks in a square — the O piece — in four
+of the game's own face colours on the cabinet's deepest plum. It is described
+once as geometry and rendered three ways, so the tab icon and the home-screen
+icon cannot drift apart:
+
+| File                     | What it is                                              |
+| ------------------------ | ------------------------------------------------------- |
+| the `rel="icon"` data URI | The favicon, still inline, still not a request.         |
+| `icon.svg`               | The scalable entry in the manifest.                     |
+| `icon-192.png` / `icon-512.png` | Rasterised at build time from the same shapes.   |
+| `icon-maskable-512.png`  | Full-bleed, blocks inside the 80% safe circle.          |
+| `apple-touch-icon.png`   | 180px, opaque and square — iOS rounds it itself.        |
+
+The PNGs are rasterised by `build/png.ts`: a point-in-rounded-rect test, 4×4
+supersampling and `node:zlib`, in about a hundred lines. Five rounded rectangles
+do not need an image library with a native binary attached to it, and this is
+why the repository still contains no image file and no runtime dependency. The
+colours come out of `src/style.css` at build time — `build/icon.test.ts` and
+`build/manifest.test.ts` fail if the icon or the manifest's two colours stop
+agreeing with the palette.
 
 ## Controls
 
@@ -297,22 +370,41 @@ asserted.
 - **A history you can read without seeing colour.** Each of the daily strip's 30
   cells is a hollow circle or a filled square before it is a shade, and carries
   the date and the score as text as well as in a tooltip.
+- **News, not interruptions.** The install offer and the "a new version is
+  ready" row are ordinary page content in the tab order, after the footer — not
+  a toast over the well, and not a second live region. The update announcement
+  goes through the one polite region like everything else, and dismissing the
+  row puts focus back on the well rather than dropping it.
 
 ## Bundle size
 
-The production build is three files and no runtime dependencies:
+The production build is still three files to start a game, and no runtime
+dependencies:
 
 | File         | Raw      | Gzipped     |
 | ------------ | -------- | ----------- |
-| `index.js`   | 89.3 KB  | **30.7 KB** |
-| `index.css`  | 21.6 KB  | **4.8 KB**  |
-| `index.html` | 1.5 KB   | **0.7 KB**  |
-| **Total**    | 112.4 KB | **36.2 KB** |
+| `index.js`   | 92.6 KB  | **31.8 KB** |
+| `index.css`  | 22.5 KB  | **5.0 KB**  |
+| `index.html` | 2.5 KB   | **1.1 KB**  |
+| **Total**    | 117.6 KB | **37.9 KB** |
 
-JS + CSS is **35.5 KB gzipped**, against a budget of 100 KB. There is nothing
-else to fetch: the favicon is an inline SVG data URI, there are no web fonts,
-no images and no audio files. Re-measure with `npm run build` — Vite prints the
-gzipped figure for every asset.
+JS + CSS is **36.8 KB gzipped**, against a budget of 100 KB — a rise of 1.2 KB
+for the install offer, the update notice and the worker's page-side half. The
+favicon is still an inline SVG data URI, there are still no web fonts and no
+audio files, and starting a game still costs exactly those three requests.
+
+Everything else is fetched by the service worker after the first paint, or by
+the platform when the app is installed, and none of it is on the path to a game:
+
+| File                      | Raw     |
+| ------------------------- | ------- |
+| `sw.js`                   | 4.7 KB  |
+| `manifest.webmanifest`    | 1.0 KB  |
+| `icon.svg`                | 0.4 KB  |
+| the four PNG icons        | 17.7 KB |
+
+Re-measure with `npm run build` — Vite prints the gzipped figure for every
+asset.
 
 ## Architecture
 
@@ -325,9 +417,16 @@ gzipped figure for every asset.
 │   ├── main.ts         # Composition root — the one place they meet
 │   ├── style.css       # The palette and the layout, in one `:root` block
 │   └── *.test.ts       # Tests, colocated with the code they cover
+├── build/              # Build-time generators. Never shipped as code.
+│   ├── css.ts          # Reads the palette back out of style.css
+│   ├── icon.ts         # The icon, as geometry, in one place
+│   ├── png.ts          # A rasteriser and a PNG encoder, in ~100 lines
+│   ├── manifest.ts     # The web app manifest, from the palette
+│   ├── sw.js           # The service worker, shipped as it is written
+│   └── plugin.ts       # The Vite plugin that emits all of the above
 ├── eslint.config.js
 ├── tsconfig.json       # strict, plus `noUncheckedIndexedAccess`
-└── vite.config.ts      # Vite + Vitest + coverage thresholds
+└── vite.config.ts      # Vite + the plugin + Vitest + coverage thresholds
 ```
 
 ### The engine is a pure state machine
@@ -407,7 +506,7 @@ duplicate.
 
 ## Testing
 
-Around 790 tests, in about four seconds.
+Around 850 tests, in about five seconds.
 
 The engine carries a coverage floor because it is the part that must not rot.
 The browser layer does not, deliberately: the tests there cover the **pure**
@@ -416,6 +515,14 @@ stats ladder, HUD formatting, the auto-repeat clock, layout arithmetic, the
 audio cue table — and leave rendering to be verified by looking at it. Chasing
 a coverage number through the canvas would buy brittle tests rather than
 confidence.
+
+`build/` is tested the same way and for the same reason: the icon's fills
+against the palette, the maskable variant against the safe circle, the
+manifest's colours against `style.css` (by a parser deliberately unlike the
+one the build uses, so it is a second opinion rather than an echo), and the
+*generated* service worker — that it precaches, that it never writes to a cache
+while serving a request, and that its one `skipWaiting` is inside the message
+handler.
 
 Two files run in jsdom rather than Node: `src/ui/a11y.test.ts` runs axe-core
 over the real shell four times (dialogs closed, the start screen and its two
@@ -495,14 +602,32 @@ that will tell you whether it still meets AA.
 `main`: `npm ci`, `npm test`, `npm run build`, then upload `dist/`. There is no
 `gh-pages` branch — `dist/` stays gitignored.
 
+The site is served from `/mega-tetris-test/`, which is why `base: './'` in
+`vite.config.ts`, `start_url` and `scope` in the manifest, and every URL in the
+service worker are all relative. It is one constraint answered four times, and
+the way to check it is to serve the built `dist/` **under a path** rather than
+at the root:
+
+```bash
+npm run build
+mkdir -p /tmp/site/mega-tetris-test && cp -r dist/. /tmp/site/mega-tetris-test/
+cd /tmp/site && python3 -m http.server 8099
+# then open http://127.0.0.1:8099/mega-tetris-test/
+```
+
+Every deploy is picked up by an already-installed cabinet through the update
+path above; nothing is ever stranded on an old build.
+
 ## Credits and licensing
 
 Mega Tetris is an **original implementation**, written from scratch and
 inspired by the falling-block puzzle genre. No code, artwork, sound, font or
 level data is copied from any commercial implementation of the genre, and the
 project contains **no third-party or copyrighted assets of any kind** — the
-seven piece colours, the cabinet palette, the piece marks, the favicon and every
-sound are its own, defined in CSS or generated at runtime. The rotation kick
+seven piece colours, the cabinet palette, the piece marks, the icon set and
+every sound are its own, defined in CSS or generated — the favicon and the
+installed app's icons are drawn as geometry in `build/icon.ts` and rasterised
+at build time, so there is not one image file in the repository either. The rotation kick
 tables are this project's own small ordered lists, not a reproduction of any
 published system.
 
