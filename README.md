@@ -2,7 +2,7 @@
 
 A cheerful falling-block puzzle game that lives entirely in the browser — a
 tiny arcade cabinet at a URL. No backend and no accounts: three static files
-totalling **45 KB gzipped**, and you are playing. Install it and it is a cabinet
+totalling **53 KB gzipped**, and you are playing. Install it and it is a cabinet
 on your home screen too, playable with the network switched off.
 
 **▶ [Play it](https://nunocoracao.github.io/mega-tetris-test/)**
@@ -44,10 +44,15 @@ browser.
   preference, in one versioned `localStorage` key that is written on the
   assumption that storage is hostile — plus your daily streak and the last
   thirty days of it.
+- **Four cabinets, one game.** Midnight, Daybreak, Sunset and Lagoon: complete
+  skins rather than hue rotations, chosen from a labelled picker with swatches
+  and remembered between visits. Every one of them is measured against WCAG AA
+  in both contrast modes by the test suite. See
+  [Skins](#skins--the-four-cabinets).
 - **Meant to be usable.** Full keyboard operation, real modal dialogs, a
-  screen-reader description of the well, a high-contrast palette, per-piece
-  shape marks so nothing depends on colour alone, and `prefers-reduced-motion`
-  honoured live.
+  screen-reader description of the well, a high-contrast variant of every skin,
+  per-piece shape marks so nothing depends on colour alone, and
+  `prefers-reduced-motion` honoured live.
 - **Installs, and then plays on a plane.** A manifest, an icon set drawn in this
   repository, and a forty-line service worker that precaches the build and is
   honest about updates: a new deploy offers you a reload rather than taking one.
@@ -317,8 +322,8 @@ ignored.
 **Standalone.** With no browser chrome there is no chrome keeping the cabinet
 off the notch, so the page pays the safe-area insets itself — the on-screen pad
 sits above the home indicator rather than under it. `theme-color` follows the
-palette, so the status bar changes with the contrast setting rather than leaving
-a seam across the top of the phone. Nothing in the game ever depended on a back
+palette, so the status bar changes with the skin *and* with the contrast setting
+rather than leaving a seam across the top of the phone. Nothing in the game ever depended on a back
 button, an address bar or the word "tab".
 
 **In development none of this happens.** `registerServiceWorker` is a no-op
@@ -349,6 +354,16 @@ why the repository still contains no image file and no runtime dependency. The
 colours come out of `src/style.css` at build time — `build/icon.test.ts` and
 `build/manifest.test.ts` fail if the icon or the manifest's two colours stop
 agreeing with the palette.
+
+**The icon set stays on the default palette, on purpose.** It is generated once,
+at build time, from the Midnight block; choosing Daybreak does not redraw it,
+and should not. A home-screen icon is how somebody *finds* the game among forty
+others, and one that changed colour with a preference — or differed between two
+devices signed into the same account — would be worse than one that does not.
+The manifest's `theme_color` and `background_color` are the same argument: they
+are what the platform paints before a single line of our code has run, so they
+have to be constants. `theme-color` in the live document is the part that *does*
+follow the skin, because by then there is a running page to follow it.
 
 ## Controls
 
@@ -478,10 +493,45 @@ ten-wide well in two frames — about 33 ms, which is below the threshold of
 noticing. The cap is what stops one long frame queueing hundreds of moves into
 the engine and the replay tape.
 
+#### Skins — the four cabinets
+
+The cabinet comes in four dresses. **Midnight** is the default and has not
+changed: deep plum lit from above. **Daybreak** opens the shutters — warm paper,
+ink-dark blocks, a marmalade accent. **Sunset** is late light on a rose-brown
+interior. **Lagoon** is deep water lit from the surface, with a coral accent.
+Each is a point of view rather than a hue rotation: every one of the thirty-one
+palette properties moves, including which way the veils wash and whether the
+seven faces are bright on dark or deep on light.
+
+Pick one under **Cabinet skin** in the settings dialog. It is a radio group with
+a swatch and a visible name per skin, so arrow keys walk it and the chosen one
+is announced without anybody having to press it to find out; the choice is
+stored with the rest of your settings and survives a reload. A stored value this
+build does not recognise falls all the way back to Midnight.
+
+Three rules hold whichever one you are wearing:
+
+- **The contrast setting composes with it.** Every skin has a high-contrast
+  variant, so `Auto / High / Standard` still works on top of the skin rather
+  than instead of it — that is twelve palettes, and `src/ui/style.test.ts`
+  measures every AA and 1.4.11 pair in all twelve.
+- **The seven pieces stay seven pieces.** Pairwise face distinctness is checked
+  per skin, and the per-piece marks are identical across all of them.
+- **Nothing about the game changes.** Colour is presentation: the engine has
+  never heard of a skin, `REPLAY_FORMAT_VERSION` does not move, and a run
+  recorded on Lagoon replays cell for cell on Midnight.
+
+The installed app's icon set and the manifest's two colours deliberately stay on
+Midnight — see [The icon](#the-icon) for why that is a feature and not an
+oversight.
+
 #### Where the settings live
 
 The four quick toggles — Sound, Effects, Contrast, Touchpad — stay in the pause
-menu **as well as** appearing in the settings dialog in labelled groups. That
+menu **as well as** appearing in the settings dialog in labelled groups. The
+skin picker is only in the dialog: it is a choice you make once and then forget,
+not something to reach for mid-run, and four swatches do not belong in a footer.
+That
 is a deliberate duplication of *controls* and not of state: both write through
 the same accessor into the same field of `ui/storage.ts`, so they cannot
 disagree, and moving one changes the other. The reason to keep them is
@@ -588,13 +638,19 @@ asserted.
   the live region, never a colour or a shake. `Tab`, `Enter` and `Escape` are
   never capturable, so the dialog cannot become a trap. See
   [Making it yours](#making-it-yours).
-- **Contrast.** Every text pair meets WCAG AA (4.5:1) and every control
-  boundary meets 1.4.11 (3:1), in **both** palettes — computed from the real
-  declarations in `style.css` by `src/ui/style.test.ts`, which fails the suite
-  if an edit drops one below the bar.
+- **Contrast, across the whole matrix.** Every text pair meets WCAG AA (4.5:1)
+  and every control boundary meets 1.4.11 (3:1) — in every one of the four
+  skins, in every one of the three contrast settings, computed from the real
+  declarations in `style.css` by `src/ui/style.test.ts`. Twelve palettes, every
+  pair, every time; an edit that drops one below the bar fails the suite.
+- **Seven pieces stay seven pieces.** Every pair of block faces in every skin is
+  at least ΔE\*ab 15 apart, measured in CIE L\*a\*b\* rather than as a contrast
+  ratio — WCAG contrast only knows about lightness, and would happily call
+  turquoise and mint identical.
 - **Not just colour.** Each piece kind carries a mark stamped into its blocks —
   a bar for I, a ring for O, a plus for T, mirrored diagonals for S and Z, a
-  pillar for J, a double bar for L — at 7:1 or better against its own face.
+  pillar for J, a double bar for L — at 7:1 or better against its own face. The
+  marks do not vary by skin: a cue that moves is not a cue.
 - **Reduced motion.** `prefers-reduced-motion` is read through `matchMedia`, so
   changing it in system settings takes effect without a reload. With motion off
   there are no particles, no shake and no count-up; the information all stays,
@@ -618,15 +674,27 @@ dependencies:
 
 | File         | Raw      | Gzipped     |
 | ------------ | -------- | ----------- |
-| `index.js`   | 134.2 KB | **44.4 KB** |
-| `index.css`  | 28.4 KB  | **5.9 KB**  |
+| `index.js`   | 135.9 KB | **45.0 KB** |
+| `index.css`  | 33.2 KB  | **7.1 KB**  |
 | `index.html` | 2.5 KB   | **1.1 KB**  |
-| **Total**    | 165.1 KB | **51.4 KB** |
+| **Total**    | 171.6 KB | **53.2 KB** |
 
-JS + CSS is **50.3 KB gzipped**, against a budget of 100 KB. The settings
-dialog cost **+6.6 KB gzipped** of that (5.9 KB of JS, 0.6 KB of CSS) — the
-remapper's rules and copy, three sliders, the try-it strip, and about two
-hundred lines of markup. Rather more than a settings screen sounds like, and
+JS + CSS is **52.1 KB gzipped**, against a budget of 100 KB.
+
+The three new skins cost **+1.8 KB gzipped** (1.2 KB of CSS, 0.6 KB of JS),
+against a ceiling of about 2 KB set before any of them was written. Six blocks
+of thirty-odd hex values is more raw bytes than that sounds like — the CSS grew
+4.8 KB — but the property names repeat exactly from block to block, which is the
+case gzip is best at. Two decisions kept it there: the skins have no
+`prefers-contrast` media copy (only the default needs one, because only the
+default can be on screen before the script runs), and the picker's swatches are
+painted by the skins' own declarations rather than by a second set of swatch
+colours. A fourth new skin would have cost another ~0.4 KB; three was the point
+at which the set felt complete, not the point at which the budget bit.
+
+The settings dialog before it cost **+6.6 KB gzipped** (5.9 KB of JS, 0.6 KB of
+CSS) — the remapper's rules and copy, three sliders, the try-it strip, and about
+two hundred lines of markup. Rather more than a settings screen sounds like, and
 the reason is that most of it is *sentences*: every refusal the remapper can
 make is a written explanation rather than a red border, and there are a dozen
 of them.
@@ -673,7 +741,7 @@ asset.
 │   │                   #   in a link, plus a raw-DEFLATE decoder)
 │   ├── ui/             # The browser layer: canvas, input, DOM, storage.
 │   ├── main.ts         # Composition root — the one place they meet
-│   ├── style.css       # The palette and the layout, in one `:root` block
+│   ├── style.css       # The four skins, and the layout
 │   └── *.test.ts       # Tests, colocated with the code they cover
 ├── build/              # Build-time generators. Never shipped as code.
 │   ├── css.ts          # Reads the palette back out of style.css
@@ -758,21 +826,29 @@ change what the help panel says: the help list, the controls card beside the
 well and the on-screen pad's tooltips are three views of one binding table, and
 `applyBindings` republishes it into all three whenever it moves.
 
-### One palette, in CSS
+### The palette lives in CSS, and so do the skins
 
-Every colour is declared once, in the single `:root` block of `src/style.css`.
-The canvas keeps no second copy: `ui/palette.ts` reads the custom properties out
-of the computed style at startup and again whenever a colour preference changes,
-and each block's lit bevel, shaded edge and outline are derived from its face
-colour arithmetically. Restyling the game — including the seven piece faces — is
-a matter of editing CSS. `src/ui/palette.test.ts` parses the stylesheet and
-fails if the pre-first-paint fallback constants drift from it;
-`src/ui/layout.test.ts` does the same for the two geometry numbers CSS has to
-duplicate.
+Every colour is declared in `src/style.css` and nowhere else. The canvas keeps
+no second copy: `ui/palette.ts` reads the custom properties out of the computed
+style at startup and again whenever a colour preference changes, and each
+block's lit bevel, shaded edge and outline are derived from its face colour
+arithmetically. `src/wiring.test.ts` enforces the rule directly — every browser
+file except `palette.ts` is scanned for hex and `rgb()` literals, and finding
+one fails the suite.
+
+That is what makes a skin a stylesheet edit rather than a feature. Four blocks
+of the same thirty-one properties, four selectors, and the renderer, the
+particles, the score popups and the ghost all follow with no change at all:
+they ask `getPalette()`, and `applyTheme` changes the answer by moving one
+attribute and re-reading.
+
+`src/ui/palette.test.ts` parses the stylesheet and fails if the pre-first-paint
+fallback constants drift from it; `src/ui/layout.test.ts` does the same for the
+two geometry numbers CSS has to duplicate.
 
 ## Testing
 
-Around 1,100 tests, in about ten seconds.
+Around 1,300 tests, in about fifteen seconds.
 
 The engine carries a coverage floor because it is the part that must not rot.
 The browser layer does not, deliberately: the tests there cover the **pure**
@@ -789,6 +865,15 @@ one the build uses, so it is a second opinion rather than an echo), and the
 *generated* service worker — that it precaches, that it never writes to a cache
 while serving a request, and that its one `skipWaiting` is inside the message
 handler.
+
+`src/ui/style.test.ts` is the one that makes a fifth skin safe to add. It parses
+`style.css` itself and walks four skins × three contrast settings, measuring
+every WCAG text and boundary pair, every block against the well, and every pair
+of blocks against each other — then checks the structure: that each skin
+declares the *complete* property set (a missing one silently inherits the
+default and produces a half-dressed cabinet), that no skin invents a property
+the default lacks, and that the skins in the stylesheet and the skins in
+`ui/theme.ts` are the same list.
 
 The two files that carry the most weight are `src/engine/replay.test.ts` and
 `src/engine/share.test.ts`. The first is the determinism claim, cashed: five
@@ -912,7 +997,7 @@ Mega Tetris is an **original implementation**, written from scratch and
 inspired by the falling-block puzzle genre. No code, artwork, sound, font or
 level data is copied from any commercial implementation of the genre, and the
 project contains **no third-party or copyrighted assets of any kind** — the
-seven piece colours, the cabinet palette, the piece marks, the icon set and
+seven piece colours, all four cabinet palettes, the piece marks, the icon set and
 every sound are its own, defined in CSS or generated — the favicon and the
 installed app's icons are drawn as geometry in `build/icon.ts` and rasterised
 at build time, so there is not one image file in the repository either. The rotation kick

@@ -21,11 +21,16 @@ import { ICON_SVG_FILE, buildManifest, manifestJson } from './manifest';
 const CSS = readStylesheet();
 
 /**
- * A custom property's value, read straight out of the first `:root` block by a
- * line-by-line scan rather than by the block parser the build uses.
+ * A custom property's value, read straight out of the default palette block by
+ * a line-by-line scan rather than by the block parser the build uses.
+ *
+ * Anchored on the swatch selector the palette block carries, for the same
+ * reason `build/css.ts` is: `:root {` names the geometry block too.
  */
+const PALETTE = ".swatch[data-theme='midnight'] {";
+
 function declared(name: string): string {
-  const root = CSS.slice(CSS.indexOf(':root {'), CSS.indexOf('\n}', CSS.indexOf(':root {')));
+  const root = CSS.slice(CSS.indexOf(PALETTE), CSS.indexOf('\n}', CSS.indexOf(PALETTE)));
   for (const line of root.split('\n')) {
     const [property, ...rest] = line.split(':');
     if (property?.trim() === name) {

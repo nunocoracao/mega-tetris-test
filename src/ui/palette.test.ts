@@ -22,13 +22,16 @@ import {
 const HEX = /^#[0-9a-f]{6}$/;
 
 /**
- * The custom properties declared in the *first* `:root` block of the
- * stylesheet — the base palette, not the `prefers-contrast` overrides that
- * follow it.
+ * The custom properties declared in the *default palette* block — Midnight,
+ * not the skins below it and not the `prefers-contrast` overrides.
+ *
+ * Located by its second selector, which occurs exactly once: `:root {` names
+ * the geometry block as well now that the palette has been split out of it, so
+ * anchoring there would have found the wrong one without complaining.
  */
 function rootProperties(): Map<string, string> {
   const css = readFileSync(fileURLToPath(new URL('../style.css', import.meta.url)), 'utf8');
-  const start = css.indexOf(':root {');
+  const start = css.indexOf(".swatch[data-theme='midnight'] {");
   expect(start).toBeGreaterThanOrEqual(0);
   const end = css.indexOf('\n}', start);
   const block = css.slice(start, end);

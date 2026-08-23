@@ -1,5 +1,6 @@
 /**
- * WCAG contrast, checked against the stylesheet itself.
+ * WCAG contrast, checked against the stylesheet itself — for every skin, in
+ * every contrast mode.
  *
  * An automated page audit cannot do this one: axe computes colour contrast by
  * asking a real rendering engine what pixels it painted, and neither jsdom nor
@@ -9,8 +10,21 @@
  * declarations in `style.css`. A colour edit that drops a pair under AA fails
  * the suite rather than shipping.
  *
- * Both palettes are checked: the default one, and the high-contrast overrides
- * layered on top of it.
+ * The matrix is the point. There are four skins and three contrast settings,
+ * and the settings compose *on top of* the skins rather than replacing them —
+ * so every pair below is measured 4 × 3 times (with `auto` resolved both ways
+ * through the real `isHighContrast`, which is what makes this a check on the
+ * shipped decision rather than on a guess about it). A skin that is only legible
+ * in standard contrast, or a high-contrast block that forgets a property and
+ * silently inherits Midnight's, fails here.
+ *
+ * Three structural checks sit alongside the ratios, and they are the ones that
+ * make adding a skin safe rather than merely possible:
+ *
+ *   - every skin declares the *complete* property set, so nothing half-inherits;
+ *   - no skin declares a property the default does not;
+ *   - the skins in the stylesheet and the skins in `ui/theme.ts` are the same
+ *     list, so a picker entry can never point at a block that is not there.
  */
 
 import { readFileSync } from 'node:fs';
@@ -19,7 +33,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { PIECE_KINDS } from '../engine';
+import { CONTRAST_SETTINGS, isHighContrast, type ContrastSetting } from './contrast';
 import { PIECE_PROPERTY } from './palette';
+import { DEFAULT_THEME, THEME_IDS, themeLabel, type ThemeId } from './theme';
 
 const CSS = readFileSync(fileURLToPath(new URL('../style.css', import.meta.url)), 'utf8');
 
@@ -61,14 +77,65 @@ function declarations(body: string): Map<string, string> {
   return found;
 }
 
-const BASE = declarations(ruleBody(CSS, ':root {'));
-const HIGH_ATTRIBUTE = declarations(ruleBody(CSS, ":root[data-contrast='on'] {"));
+/**
+ * Where one skin's two blocks live.
+ *
+ * Both are found by a selector that occurs exactly once. The base block is
+ * anchored on its `.swatch` half rather than its `:root` half, because every
+ * skin — the default included — carries the pair so the picker's chips can be
+ * painted by the very declarations they advertise.
+ */
+function baseSelector(theme: ThemeId): string {
+  return `.swatch[data-theme='${theme}'] {`;
+}
+
+/**
+ * The high-contrast override block. Midnight's is unqualified, because Midnight
+ * is the absence of a `data-theme` attribute rather than a value of it.
+ */
+function highSelector(theme: ThemeId): string {
+  return theme === DEFAULT_THEME
+    ? ":root[data-contrast='on'] {"
+    : `:root[data-theme='${theme}'][data-contrast='on'] {`;
+}
+
+const BASE = new Map(THEME_IDS.map((id) => [id, declarations(ruleBody(CSS, baseSelector(id)))]));
+const HIGH = new Map(THEME_IDS.map((id) => [id, declarations(ruleBody(CSS, highSelector(id)))]));
+
+/** Midnight's, and therefore everybody's. Absent means "not a themed property". */
+const BASE_PROPERTIES = BASE.get(DEFAULT_THEME) as Map<string, string>;
+const HIGH_PROPERTIES = HIGH.get(DEFAULT_THEME) as Map<string, string>;
+
+/** The one media query: what a document is dressed in before the script runs. */
 const HIGH_MEDIA = declarations(ruleBody(CSS, ":root:not([data-contrast='off']) {"));
 
-/** The palette a player actually sees, base with any overrides layered on. */
-function palette(overrides: Map<string, string> = new Map()): Map<string, string> {
-  return new Map([...BASE, ...overrides]);
+/**
+ * The palette a player on `theme` actually sees at `setting`, given what their
+ * machine asked for. The overrides are layered on the skin, never instead of it
+ * — which is exactly what the cascade does, and what the whole feature rests on.
+ */
+function palette(theme: ThemeId, setting: ContrastSetting, systemMore: boolean): Map<string, string> {
+  const base = BASE.get(theme) as Map<string, string>;
+  if (!isHighContrast(setting, systemMore)) {
+    return new Map(base);
+  }
+  return new Map([...base, ...(HIGH.get(theme) as Map<string, string>)]);
 }
+
+/** Every combination the matrix runs over, named the way a failure should read. */
+interface Mode {
+  readonly what: string;
+  readonly setting: ContrastSetting;
+  readonly systemMore: boolean;
+}
+
+const MODES: readonly Mode[] = CONTRAST_SETTINGS.flatMap((setting) =>
+  [false, true].map((systemMore) => ({
+    what: `${setting} contrast on a machine asking for ${systemMore ? 'more' : 'standard'}`,
+    setting,
+    systemMore,
+  })),
+);
 
 // ---------------------------------------------------------------------------
 // Colour arithmetic
@@ -116,18 +183,45 @@ function composite(over: Rgba, under: Rgba): Rgba {
   };
 }
 
+/** sRGB channel → linear light. Shared by luminance and the Lab conversion. */
+function linear(value: number): number {
+  const v = value / 255;
+  return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+}
+
 /** WCAG relative luminance. */
 function luminance({ r, g, b }: Rgba): number {
-  const channel = (value: number): number => {
-    const v = value / 255;
-    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+  return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
 }
 
 function contrastRatio(a: Rgba, b: Rgba): number {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
   return (hi + 0.05) / (lo + 0.05);
+}
+
+/**
+ * CIE L*a*b*, via linear sRGB and D65.
+ *
+ * Needed because WCAG contrast is the *wrong* tool for "are these two blocks
+ * telling themselves apart": it only knows about lightness, so turquoise and
+ * mint at the same luminance come out at 1.05:1 and look identical to it while
+ * looking nothing alike on screen. Lab knows about hue as well, and the
+ * straight-line distance between two Lab points (ΔE*ab, CIE 1976) is the
+ * cheapest honest answer to the question the pieces actually pose.
+ */
+function toLab({ r, g, b }: Rgba): readonly [number, number, number] {
+  const [red, green, blue] = [linear(r), linear(g), linear(b)];
+  const x = (red * 0.4124 + green * 0.3576 + blue * 0.1805) / 0.95047;
+  const y = red * 0.2126 + green * 0.7152 + blue * 0.0722;
+  const z = (red * 0.0193 + green * 0.1192 + blue * 0.9505) / 1.08883;
+  const f = (t: number): number => (t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116);
+  return [116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z))];
+}
+
+function deltaE(a: Rgba, b: Rgba): number {
+  const [l1, a1, b1] = toLab(a);
+  const [l2, a2, b2] = toLab(b);
+  return Math.hypot(l1 - l2, a1 - a2, b1 - b2);
 }
 
 /**
@@ -220,6 +314,9 @@ const UI_PAIRS: readonly Pair[] = [
   { what: 'a keycap border against its cap', fg: '--edge', bg: '--cabinet' },
   { what: 'the well frame against the well', fg: '--field-frame', bg: '--well' },
   { what: 'the well frame against the floor of the well', fg: '--field-frame', bg: '--well-deep' },
+  // The skin picker's swatch is a well with a frame around it, so it inherits
+  // the same requirement — a chip whose border vanished would be a colour blob.
+  { what: 'a swatch’s frame against the swatch', fg: '--field-frame', bg: '--well' },
   { what: 'the focus ring on the cabinet floor', fg: '--accent', bg: '--cabinet-deep' },
   { what: 'the focus ring on a panel', fg: '--accent', bg: '--panel' },
   { what: 'the focus ring on a control', fg: '--accent', bg: '--panel-hover' },
@@ -243,6 +340,19 @@ const UI_PAIRS: readonly Pair[] = [
   // point of it is watching the block move, so it has to be visible doing it.
   { what: 'the try-it block against its strip', fg: '--accent', bg: '--panel-canvas' },
 ];
+
+/**
+ * How far apart two block faces have to be before the shape of the stack can be
+ * read without counting.
+ *
+ * ΔE*ab, not a contrast ratio — see `toLab`. 15 is a little under a JND at a
+ * glance and is where the game already sits: Midnight's tightest pair in high
+ * contrast (marigold against tangerine) is 16.2, and every skin below clears
+ * 21. What the number deliberately does *not* have to carry is the whole job.
+ * `ui/contrast.ts` stamps a distinct mark into every kind, so colour is a
+ * convenience for telling two pieces apart and never the only cue.
+ */
+const MIN_PIECE_DELTA_E = 15;
 
 /** The ratio a pair actually achieves in a given palette. */
 function ratioFor(vars: Map<string, string>, pair: Pair): number {
@@ -277,57 +387,150 @@ function checkPieces(vars: Map<string, string>): void {
   }
 }
 
-describe('the default palette', () => {
-  it('meets AA for every piece of text', () => {
-    check(palette(), TEXT_PAIRS, 4.5);
+/** And against each other: seven pieces have to stay seven pieces. */
+function checkPiecesApart(vars: Map<string, string>): void {
+  const faces = PIECE_KINDS.map((kind) => ({ kind, rgb: resolve(vars, PIECE_PROPERTY[kind]) }));
+
+  for (let i = 0; i < faces.length; i += 1) {
+    for (let j = i + 1; j < faces.length; j += 1) {
+      const a = faces[i] as (typeof faces)[number];
+      const b = faces[j] as (typeof faces)[number];
+      const distance = deltaE(a.rgb, b.rgb);
+      expect(
+        Number(distance.toFixed(1)),
+        `${a.kind} and ${b.kind} are ΔE ${distance.toFixed(1)} apart, under ${MIN_PIECE_DELTA_E}`,
+      ).toBeGreaterThanOrEqual(MIN_PIECE_DELTA_E);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The matrix
+// ---------------------------------------------------------------------------
+
+for (const theme of THEME_IDS) {
+  describe(`the ${themeLabel(theme)} skin`, () => {
+    for (const mode of MODES) {
+      describe(`in ${mode.what}`, () => {
+        const vars = palette(theme, mode.setting, mode.systemMore);
+
+        it('meets AA for every piece of text', () => {
+          check(vars, TEXT_PAIRS, 4.5);
+        });
+
+        it('meets 3:1 for every control boundary and focus ring', () => {
+          check(vars, UI_PAIRS, 3);
+        });
+
+        it('keeps every block readable against the well', () => {
+          checkPieces(vars);
+        });
+
+        it('keeps the seven blocks apart from each other', () => {
+          checkPiecesApart(vars);
+        });
+      });
+    }
+
+    it('declares the complete palette, so nothing half-inherits the default', () => {
+      // The failure this prevents is quiet rather than loud: a skin that omits
+      // `--panel-canvas` does not break, it just wears Midnight's plum inset in
+      // the middle of a daylight cabinet, and only a person looking at it would
+      // ever know.
+      const declared = BASE.get(theme) as Map<string, string>;
+      const missing = [...BASE_PROPERTIES.keys()].filter((name) => !declared.has(name));
+
+      expect(missing, `${themeLabel(theme)} leaves ${missing.join(', ')} to the default`).toEqual(
+        [],
+      );
+    });
+
+    it('declares a colour scheme, so the browser’s own widgets follow', () => {
+      // Range sliders, checkboxes and scrollbars are painted by the browser,
+      // not by us. A light skin under `color-scheme: dark` gets dark sliders on
+      // a pale panel, which is the one part of the cabinet CSS cannot restyle.
+      expect(ruleBody(CSS, baseSelector(theme))).toMatch(/color-scheme:\s*(light|dark);/);
+    });
+
+    it('declares the complete high-contrast override set', () => {
+      const declared = HIGH.get(theme) as Map<string, string>;
+      const missing = [...HIGH_PROPERTIES.keys()].filter((name) => !declared.has(name));
+
+      expect(missing, `${themeLabel(theme)}'s high-contrast block omits ${missing.join(', ')}`)
+        .toEqual([]);
+    });
+
+    it('declares nothing the default palette does not', () => {
+      // A skin is a re-dressing, never an extension. A property invented here
+      // would be defined for one skin and undefined for the rest, which is the
+      // sort of thing that works until somebody switches skins.
+      for (const name of [...(BASE.get(theme) as Map<string, string>).keys()]) {
+        expect(BASE_PROPERTIES.has(name), `${name} is only declared by ${theme}`).toBe(true);
+      }
+      for (const name of [...(HIGH.get(theme) as Map<string, string>).keys()]) {
+        expect(
+          BASE_PROPERTIES.has(name) || HIGH_PROPERTIES.has(name),
+          `${name} is only declared in ${theme}'s high-contrast block`,
+        ).toBe(true);
+      }
+    });
+
+    it('is genuinely higher contrast in high contrast, not just different', () => {
+      const base = palette(theme, 'standard', false);
+      const high = palette(theme, 'more', false);
+      for (const pair of [...TEXT_PAIRS, ...UI_PAIRS]) {
+        const before = ratioFor(base, pair);
+        const after = ratioFor(high, pair);
+        expect(
+          Number(after.toFixed(2)),
+          `${pair.what} got *less* contrast in ${theme}'s high-contrast mode`,
+        ).toBeGreaterThanOrEqual(Number(before.toFixed(2)));
+      }
+    });
+  });
+}
+
+describe('the set of skins', () => {
+  it('is the same list in the stylesheet and in ui/theme.ts', () => {
+    // `ruleBody` has already thrown for any id in `THEME_IDS` with no block.
+    // This is the other direction: a block left behind after a skin was renamed
+    // or dropped, which the picker would never offer and nobody would notice.
+    const declared = [...CSS.matchAll(/\.swatch\[data-theme='([a-z-]+)'\]/g)]
+      .map((match) => match[1] as string)
+      .filter((id, index, all) => all.indexOf(id) === index);
+
+    expect(declared.sort()).toEqual([...THEME_IDS].sort());
   });
 
-  it('meets 3:1 for every control boundary and focus ring', () => {
-    check(palette(), UI_PAIRS, 3);
+  it('leaves the default on a bare `:root`, so an absent attribute is Midnight', () => {
+    // The whole no-regression argument rests on this: a document that has never
+    // run the script, or one whose script failed, is dressed exactly as the game
+    // shipped. Midnight is therefore the *absence* of `data-theme`, never a
+    // value of it — and no `:root[data-theme='midnight']` rule may exist.
+    expect(CSS).toMatch(/^:root,\n\.swatch\[data-theme='midnight'\] \{/m);
+    expect(CSS).not.toContain(":root[data-theme='midnight']");
   });
 
-  it('keeps every block readable against the well', () => {
-    checkPieces(palette());
+  it('gives only the default a `prefers-contrast` media copy', () => {
+    // Midnight needs one: it is what a document is dressed in before the script
+    // has had its say. A skin cannot be on screen until `data-theme` is set, by
+    // which point `applyContrast` has already written `data-contrast` — so a
+    // media copy for a skin could only ever duplicate its attribute block.
+    for (const theme of THEME_IDS) {
+      if (theme === DEFAULT_THEME) {
+        continue;
+      }
+      expect(CSS).not.toContain(`:root[data-theme='${theme}']:not([data-contrast=`);
+    }
   });
 });
 
-describe('the high-contrast palette', () => {
-  it('meets AA for every piece of text', () => {
-    check(palette(HIGH_ATTRIBUTE), TEXT_PAIRS, 4.5);
-  });
-
-  it('meets 3:1 for every control boundary and focus ring', () => {
-    check(palette(HIGH_ATTRIBUTE), UI_PAIRS, 3);
-  });
-
-  it('keeps every block readable against the well', () => {
-    checkPieces(palette(HIGH_ATTRIBUTE));
-  });
-
-  it('is genuinely higher contrast than the default, not just different', () => {
-    const base = palette();
-    const high = palette(HIGH_ATTRIBUTE);
-    for (const pair of [...TEXT_PAIRS, ...UI_PAIRS]) {
-      const before = ratioFor(base, pair);
-      const after = ratioFor(high, pair);
-      expect(
-        Number(after.toFixed(2)),
-        `${pair.what} got *less* contrast in high-contrast mode`,
-      ).toBeGreaterThanOrEqual(Number(before.toFixed(2)));
-    }
-  });
-
+describe('the default skin’s high-contrast palette', () => {
   it('is written identically in both places it has to be written', () => {
     // CSS cannot share one body between a media query and an attribute
     // selector, so the two copies are compared here instead. Add a property to
     // one and this fails until it is added to the other.
-    expect([...HIGH_MEDIA.entries()].sort()).toEqual([...HIGH_ATTRIBUTE.entries()].sort());
-  });
-
-  it('overrides only properties the base palette declares', () => {
-    for (const name of HIGH_ATTRIBUTE.keys()) {
-      expect(BASE.has(name), `--${name} is only declared in the high-contrast block`).toBe(true);
-    }
+    expect([...HIGH_MEDIA.entries()].sort()).toEqual([...HIGH_PROPERTIES.entries()].sort());
   });
 });
 

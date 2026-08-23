@@ -37,6 +37,7 @@ import {
 import { REPLAY_SPEEDS } from './replay';
 import { createSettingsPanel, type SettingsPanel } from './settings';
 import { applyBindings, createShell, type Shell } from './shell';
+import { DEFAULT_THEME, THEME_IDS, themeLabel } from './theme';
 
 let root: HTMLElement;
 let shell: Shell;
@@ -180,6 +181,7 @@ describe('the settings dialog', () => {
     let sound = true;
     let motion = 'auto';
     let contrast = 'auto';
+    let theme = 'midnight';
     let pad = 'auto';
     modal = createModal({
       element: shell.settingsDialog,
@@ -199,6 +201,10 @@ describe('the settings dialog', () => {
       contrast: {
         read: () => contrast as never,
         write: (value) => (contrast = value),
+      },
+      theme: {
+        read: () => theme as never,
+        write: (value) => (theme = value),
       },
       pad: { read: () => pad as never, write: (value) => (pad = value) },
       announce: (message) => announced.push(message),
@@ -429,6 +435,49 @@ describe('the settings dialog', () => {
       const legend = inputs[0]?.closest('fieldset')?.querySelector('legend');
       expect(legend?.textContent?.trim()).not.toBe('');
     }
+  });
+
+  it('offers every skin as a named, checkable radio in one group', () => {
+    // A swatch is a picture of a colour scheme, and a picture is nothing to a
+    // screen reader — so the *name* is the control's label and the swatch is
+    // decoration beside it. Radios rather than a cycling button, for the same
+    // reason the other three preferences are: the group announces which skin is
+    // chosen without anybody having to press anything to find out, and arrow
+    // keys move between them for free.
+    modal.open();
+
+    const inputs = shell.settings.themeInputs;
+    expect(inputs.length).toBe(THEME_IDS.length);
+    expect(inputs.map((input) => input.value)).toEqual([...THEME_IDS]);
+    expect(inputs.filter((input) => input.checked)).toHaveLength(1);
+    expect(inputs.find((input) => input.checked)?.value).toBe(DEFAULT_THEME);
+
+    const legend = inputs[0]?.closest('fieldset')?.querySelector('legend');
+    expect(legend?.textContent?.trim()).toBe('Cabinet skin');
+
+    for (const input of inputs) {
+      const label = input.closest('label');
+      const name = label?.querySelector('.choice__name');
+      expect(name?.textContent?.trim()).toBe(themeLabel(input.value as never));
+      // Nothing here is a tab stop of its own, and nothing here is announced:
+      // the swatch is the label's picture, not a second control.
+      const swatch = label?.querySelector('.swatch');
+      expect(swatch?.getAttribute('aria-hidden')).toBe('true');
+      expect(swatch?.getAttribute('data-theme')).toBe(input.value);
+    }
+  });
+
+  it('takes a skin straight through to the setting, from the keyboard', () => {
+    modal.open();
+
+    const lagoon = shell.settings.themeInputs.find((input) => input.value === 'lagoon');
+    expect(lagoon).toBeDefined();
+    // What an arrow key inside a radio group amounts to: checked, then changed.
+    (lagoon as HTMLInputElement).checked = true;
+    (lagoon as HTMLInputElement).dispatchEvent(new Event('change', { bubbles: true }));
+
+    expect(shell.settings.themeInputs.filter((input) => input.checked)).toHaveLength(1);
+    expect((lagoon as HTMLInputElement).checked).toBe(true);
   });
 
   it('asks before it throws every setting away', () => {

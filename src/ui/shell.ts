@@ -47,6 +47,7 @@ import { MOTION_SETTINGS, motionSettingLabel } from './motion';
 import { REPLAY_SPEEDS, replaySpeedLabel } from './replay';
 import { TRY_COLUMNS, formatMs, type SettingsElements } from './settings';
 import { START_LEVELS } from './stats';
+import { THEMES, themeLabel, type ThemeId } from './theme';
 import { PAD_PREFERENCES, TOUCH_PAD_BUTTONS, padPreferenceLabel } from './touch';
 
 export interface Shell {
@@ -620,12 +621,15 @@ function choiceMarkup(
   hint: string,
   values: readonly string[],
   label: (value: string) => string,
+  /** Extra markup between the radio and its name — the theme picker's swatch. */
+  decorate: (value: string) => string = () => '',
 ): string {
   const options = values
     .map(
       (value) =>
         `<label class="choice__option">
            <input type="radio" name="settings-${name}" value="${escapeHtml(value)}" data-choice="${name}">
+           ${decorate(value)}
            <span class="choice__name">${escapeHtml(label(value))}</span>
          </label>`,
     )
@@ -637,6 +641,24 @@ function choiceMarkup(
       <p class="choice__hint">${escapeHtml(hint)}</p>
     </fieldset>
   `;
+}
+
+/**
+ * A skin in miniature: the well it is played in, and four of its seven faces.
+ *
+ * The chip carries the skin's own `data-theme`, and `src/style.css` declares
+ * every skin against `.swatch[data-theme='…']` as well as against `:root` — so
+ * the swatch is painted by the very declarations the cabinet would use, and
+ * cannot drift from the thing it is advertising.
+ *
+ * `aria-hidden`, deliberately: the name beside it is the accessible label, and
+ * four coloured squares are decoration to anyone who has to be told about them.
+ */
+function swatchMarkup(theme: ThemeId): string {
+  const chips = ['i', 'o', 't', 'z']
+    .map((kind) => `<span class="swatch__chip swatch__chip--${kind}"></span>`)
+    .join('');
+  return `<span class="swatch" data-theme="${escapeHtml(theme)}" aria-hidden="true">${chips}</span>`;
 }
 
 /** One handling slider, its units and its explanation. */
@@ -792,6 +814,14 @@ function settingsDialogMarkup(): string {
             'Auto follows your system. High thickens every block outline and marks each piece.',
             CONTRAST_SETTINGS,
             (value) => contrastSettingLabel(value as (typeof CONTRAST_SETTINGS)[number]),
+          )}
+          ${choiceMarkup(
+            'theme',
+            'Cabinet skin',
+            'Colour only — the rules never change. Every skin passes the same contrast checks, in both contrast modes.',
+            THEMES.map((theme) => theme.id),
+            (value) => themeLabel(value as ThemeId),
+            (value) => swatchMarkup(value as ThemeId),
           )}
           ${choiceMarkup(
             'pad',
@@ -1107,6 +1137,7 @@ export function createShell(root: HTMLElement): Shell {
       soundInput: must<HTMLInputElement>(root, '[data-settings-sound]'),
       motionInputs: [...root.querySelectorAll<HTMLInputElement>('[data-choice="motion"]')],
       contrastInputs: [...root.querySelectorAll<HTMLInputElement>('[data-choice="contrast"]')],
+      themeInputs: [...root.querySelectorAll<HTMLInputElement>('[data-choice="theme"]')],
       padInputs: [...root.querySelectorAll<HTMLInputElement>('[data-choice="pad"]')],
       handlingInputs: HANDLING_BOUNDS.map((bound) =>
         must<HTMLInputElement>(root, `[data-handling="${bound.key}"]`),
