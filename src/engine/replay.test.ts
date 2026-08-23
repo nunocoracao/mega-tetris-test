@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { clearRows, findFullRows, isValidPosition, lockPiece, type Board } from './board';
+import { boardToStrings, clearRows, findFullRows, isValidPosition, lockPiece, type Board } from './board';
 import { applyInput, createGame, dropDistance, update, type GameState } from './game';
 import type { Rotation } from './types';
 import {
@@ -31,6 +31,7 @@ import {
   type RunRecorder,
 } from './replay';
 import { createRandom } from './random';
+import { decodeShare } from './share';
 
 // ---------------------------------------------------------------------------
 // A scripted run
@@ -689,3 +690,168 @@ describe('a log from somewhere else', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// A run recorded before the versus engine existed
+// ---------------------------------------------------------------------------
+
+/**
+ * The other half of the format's contract.
+ *
+ * `REPLAY_FORMAT_VERSION` is the promise that a link somebody was sent a month
+ * ago still plays back as the run it recorded. Every test above proves the
+ * engine agrees with *itself*; these prove it agrees with the engine as it
+ * stood **before** garbage, attacks and the bot were added, by pinning the
+ * numbers that engine produced. Nothing here is regenerated: change a rule and
+ * these go red, which is exactly when the version has to move.
+ *
+ * The link is the same literal `ui/settings.test.ts` checks the controls
+ * against — a real, checked-in artefact of the codec, not a fixture built by
+ * the thing it is testing.
+ */
+const SHARED_LINK_BEFORE_VERSUS = 'AQCy8hkAAahGCgiUI5wE-BeXI50xliOTHLZUozg';
+
+/** The whole of a finished run, as it was before this change. */
+interface HistoricRun {
+  readonly score: number;
+  readonly lines: number;
+  readonly level: number;
+  readonly status: string;
+  readonly outcome: string;
+  readonly elapsedMs: number;
+  readonly hold: string | null;
+  readonly next: readonly string[];
+  readonly bagRandom: number;
+  readonly bagQueue: readonly string[];
+  readonly board: string;
+}
+
+function historic(state: GameState): HistoricRun {
+  return {
+    score: state.score,
+    lines: state.lines,
+    level: state.level,
+    status: state.status,
+    outcome: state.outcome,
+    elapsedMs: state.elapsedMs,
+    hold: state.hold,
+    next: [...state.next],
+    bagRandom: state.bag.random,
+    bagQueue: [...state.bag.queue],
+    board: boardToStrings(state.board).join('|'),
+  };
+}
+
+describe('a run recorded before the versus engine existed', () => {
+  it('decodes and replays to exactly the state it always did', () => {
+    const decoded = decodeShare(SHARED_LINK_BEFORE_VERSUS);
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok) {
+      throw new Error(decoded.message);
+    }
+
+    const { seed, startLevel, mode, log } = decoded.run;
+    expect({ seed, startLevel, mode, entries: log.entries.length, durationMs: log.durationMs }).toEqual({
+      seed: 424_242,
+      startLevel: 1,
+      mode: 'marathon',
+      entries: 10,
+      durationMs: 9_000,
+    });
+
+    expect(historic(replay(seed, { startLevel, mode }, log))).toEqual({
+      score: 105,
+      lines: 0,
+      level: 1,
+      status: 'playing',
+      outcome: 'none',
+      elapsedMs: 9_000,
+      hold: 'J',
+      next: ['O', 'I', 'L', 'T', 'O'],
+      bagRandom: 504_377_518,
+      bagQueue: ['J', 'Z', 'S', 'I'],
+      board: [
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '..........',
+        '....T.....',
+        '...TTT....',
+        '...Z......',
+        '..ZZ.SS...',
+        '..Z.SS....',
+      ].join('|'),
+    });
+  });
+
+  /**
+   * And two much longer runs, four hundred inputs each, played to a top-out.
+   * The scripts come from `makeScript`, which is a function of its own seed and
+   * knows nothing about the engine, so these numbers are the old engine's
+   * answers and not a fixture regenerated from the new one.
+   */
+  const HISTORIC_SCRIPTS: readonly { seed: number; expected: HistoricRun }[] = [
+    {
+      seed: 1,
+      expected: {
+        score: 359,
+        lines: 0,
+        level: 1,
+        status: 'over',
+        outcome: 'toppedOut',
+        elapsedMs: 13_652,
+        hold: 'L',
+        next: ['T', 'I', 'J', 'L', 'S'],
+        bagRandom: 1_007_906_553,
+        bagQueue: ['I', 'O', 'Z', 'T'],
+        board:
+          '...ZZ.....|....ZZ....|...JJJ....|.....J....|....SS....|...SS.....|....LL....|.....LS...|' +
+          '...ZZLSS..|....ZZIS..|..TTT.I...|...T.JI...|..OO.JI...|..OOJJI...|...ZZ.I...|....ZZI...|' +
+          '.....TI...|.LLLTTT...|.L.SS.....|..SS.JJ...|..OO.J....|..OO.J....',
+      },
+    },
+    {
+      seed: 1234,
+      expected: {
+        score: 334,
+        lines: 0,
+        level: 1,
+        status: 'over',
+        outcome: 'toppedOut',
+        elapsedMs: 13_995,
+        hold: 'T',
+        next: ['J', 'Z', 'O', 'S', 'L'],
+        bagRandom: 2_903_414_796,
+        bagQueue: [],
+        board:
+          '..........|.....Z....|....ZZ....|....Z.....|....OO....|....OO....|.....I....|...T.I....|' +
+          '..TTTI....|....JI....|....JJJ...|.....SS...|....SSI...|......I...|......I...|.....ZI...|' +
+          '....ZZS...|LL..Z.SS..|.L..LLLS..|.L..L..T..|.J..OOTT..|.JJJOO.T..',
+      },
+    },
+  ];
+
+  for (const { seed, expected } of HISTORIC_SCRIPTS) {
+    it(`plays seed ${seed} to the same four hundred inputs it always did`, () => {
+      const recorder = createRecorder();
+      const live = play(seed, {}, makeScript(seed, 400), recorder);
+      expect(historic(live.state)).toEqual(expected);
+      // And the recorded log rebuilds it, which is the whole point of having
+      // written the run down in the first place.
+      expect(historic(replay(seed, {}, live.log))).toEqual(expected);
+    });
+  }
+});

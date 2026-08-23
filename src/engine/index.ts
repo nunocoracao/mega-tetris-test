@@ -5,7 +5,16 @@
  * so it can be imported by the UI, by tests, or by a plain Node script.
  */
 
-export type { ActivePiece, Cell, PieceKind, Point, Rotation, RotationDirection } from './types';
+export type {
+  ActivePiece,
+  Cell,
+  GarbageCell,
+  PieceKind,
+  Point,
+  Rotation,
+  RotationDirection,
+} from './types';
+export { GARBAGE_CELL } from './types';
 
 export {
   boxSize,
@@ -33,6 +42,7 @@ export {
   isValidPosition,
   lockPiece,
   pieceCells,
+  pushRowsUp,
   setCells,
   BOARD_HEIGHT,
   BOARD_WIDTH,
@@ -42,6 +52,53 @@ export {
 } from './board';
 
 export { dailySeed, isDateStamp, DATE_STAMP_PATTERN } from './daily';
+
+export type { ClearSignals } from './attack';
+export {
+  attackLines,
+  attackTable,
+  comboAttackLines,
+  ATTACK_LINES,
+  BACK_TO_BACK_ATTACK_BONUS,
+  COMBO_ATTACK_LINES,
+  KICKED_SPIN_ATTACK_LINES,
+  SPIN_ATTACK_LINES,
+} from './attack';
+
+export type { BoardMetrics, BotDifficulty, BotPlan, BotProfile, BotState, BotStep, BotWeights } from './bot';
+export {
+  boardMetrics,
+  columnHeights,
+  createBot,
+  distinctRotations,
+  parseBotDifficulty,
+  planPlacement,
+  scoreBoard,
+  stepBot,
+  BOT_DIFFICULTIES,
+  BOT_PROFILES,
+  BOT_WEIGHTS,
+  LOOKAHEAD_BRANCHES,
+  LOOKAHEAD_DISCOUNT,
+  WELL_TOLERANCE,
+} from './bot';
+
+export type { GarbageBatch, RiseResult } from './garbage';
+export {
+  cancelGarbage,
+  createGarbageRandom,
+  garbageDeadlineMs,
+  garbageRow,
+  nextHoleColumn,
+  pendingGarbage,
+  queueGarbage,
+  riseGarbage,
+  tickGarbage,
+  GARBAGE_DELAY_MS,
+  GARBAGE_SEED_SALT,
+  MAX_GARBAGE_BATCH_ROWS,
+  MAX_GARBAGE_QUEUE,
+} from './garbage';
 
 export type {
   RecorderOptions,
@@ -107,6 +164,7 @@ export type {
   GameOptions,
   GameState,
   GameStatus,
+  GarbageOptions,
   ModeRules,
   RunOutcome,
   SpinKind,
@@ -120,6 +178,7 @@ export {
   isResting,
   levelForLines,
   parseGameMode,
+  receiveGarbage,
   spinKind,
   spinTable,
   update,

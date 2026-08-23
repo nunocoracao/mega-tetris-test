@@ -18,7 +18,7 @@
  * disagree, the CSS wins the moment `refreshPalette` runs.
  */
 
-import { PIECE_KINDS, type PieceKind } from '../engine';
+import { GARBAGE_CELL, PIECE_KINDS, type GarbageCell, type PieceKind } from '../engine';
 
 /**
  * One block's four tones: the face, its lit bevel, its shaded edge, and the
@@ -57,8 +57,14 @@ export interface SurfaceColors {
   readonly ink: string;
 }
 
+/**
+ * Everything a filled board cell can be: one of the seven kinds, or a garbage
+ * block pushed up from below.
+ */
+export type BlockKey = PieceKind | GarbageCell;
+
 export interface Palette {
-  readonly pieces: Readonly<Record<PieceKind, BlockColor>>;
+  readonly pieces: Readonly<Record<BlockKey, BlockColor>>;
   readonly surfaces: SurfaceColors;
 }
 
@@ -122,6 +128,13 @@ const SHADE_MIX = 0.52;
  * dark relative of it clears 3:1 against both the face and the well.
  */
 const OUTLINE_MIX = 0.86;
+
+/**
+ * How far the garbage block's face travels from the cabinet frame toward the
+ * bottom of the well. Far enough to read as "not a piece", close enough to the
+ * frame to still belong to the skin.
+ */
+const GARBAGE_MIX = 0.45;
 
 /** How strongly the ghost piece is painted, as fill and outline alpha. */
 export const GHOST_ALPHA = { fill: 0.16, stroke: 0.7 } as const;
@@ -233,7 +246,7 @@ function hexFrom(read: PropertyReader, property: string, fallback: string): stri
  * reader is just a function from property name to string.
  */
 export function buildPalette(read: PropertyReader): Palette {
-  const pieces = {} as Record<PieceKind, BlockColor>;
+  const pieces = {} as Record<BlockKey, BlockColor>;
   for (const kind of PIECE_KINDS) {
     pieces[kind] = blockColor(hexFrom(read, PIECE_PROPERTY[kind], DEFAULT_PIECE_HEX[kind]));
   }
@@ -242,6 +255,13 @@ export function buildPalette(read: PropertyReader): Palette {
   for (const key of Object.keys(SURFACE_PROPERTY) as (keyof SurfaceColors)[]) {
     surfaces[key] = hexFrom(read, SURFACE_PROPERTY[key], DEFAULT_SURFACE_HEX[key]);
   }
+
+  // Garbage is nobody's colour, so it does not get one of its own: it is the
+  // cabinet's own frame pulled most of the way down toward the deep end of the
+  // well. Derived rather than declared, exactly like the bevels — which means
+  // every skin gets a garbage block that belongs to it, and the stylesheet
+  // never had to grow an eighth block colour.
+  pieces[GARBAGE_CELL] = blockColor(mixHex(surfaces.frame, surfaces.wellDeep, GARBAGE_MIX));
 
   return { pieces, surfaces };
 }

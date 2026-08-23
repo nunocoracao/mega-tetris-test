@@ -12,7 +12,7 @@
  */
 
 import { getCells, PIECE_KINDS } from './pieces';
-import type { ActivePiece, Cell, PieceKind, Point } from './types';
+import { GARBAGE_CELL, type ActivePiece, type Cell, type Point } from './types';
 
 /** Columns in the standard field. */
 export const BOARD_WIDTH = 10;
@@ -175,6 +175,45 @@ export function clearRows(board: Board, rows: readonly number[]): { board: Board
   };
 }
 
+/**
+ * Push rows in at the **bottom**, shifting everything already on the board up
+ * by as many rows, and hand back whatever fell off the top.
+ *
+ * The mirror image of `clearRows`, and deliberately generic: it knows nothing
+ * about garbage, only about rows. Each entry of `newRows` must be exactly
+ * `board.width` cells wide; the first entry ends up highest, so the array reads
+ * top-to-bottom like everything else here.
+ *
+ * `overflow` is the rows that no longer fit, again top-to-bottom. The caller
+ * decides what that means — for garbage it is a top-out, because the stack has
+ * been shoved out of the well.
+ */
+export function pushRowsUp(
+  board: Board,
+  newRows: readonly (readonly Cell[])[],
+): { board: Board; overflow: readonly (readonly Cell[])[] } {
+  if (newRows.length === 0) {
+    return { board, overflow: [] };
+  }
+  for (const [index, row] of newRows.entries()) {
+    if (row.length !== board.width) {
+      throw new Error(`pushRowsUp: row ${index} is ${row.length} wide, expected ${board.width}`);
+    }
+  }
+
+  const lost = Math.min(newRows.length, board.height);
+  const overflow: (readonly Cell[])[] = [];
+  for (let y = 0; y < lost; y += 1) {
+    overflow.push(board.cells.slice(y * board.width, (y + 1) * board.width));
+  }
+
+  // Everything that survives, then the new rows underneath it. When more rows
+  // arrive than the board is tall, only the last `height` of them land.
+  const kept = board.cells.slice(lost * board.width);
+  const landing = newRows.slice(Math.max(0, newRows.length - board.height)).flat();
+  return { board: { ...board, cells: [...kept, ...landing] }, overflow };
+}
+
 /** True when no cell on the board is filled. */
 export function isBoardEmpty(board: Board): boolean {
   return board.cells.every((cell) => cell == null);
@@ -197,12 +236,15 @@ export function boardToStrings(board: Board): string[] {
   return rows;
 }
 
-const KIND_BY_CHAR = new Map<string, PieceKind>(PIECE_KINDS.map((kind) => [kind, kind]));
+const CELL_BY_CHAR = new Map<string, Exclude<Cell, null>>([
+  ...PIECE_KINDS.map((kind) => [kind, kind] as const),
+  [GARBAGE_CELL, GARBAGE_CELL] as const,
+]);
 
 /**
  * Parse ASCII art back into a board. The inverse of `boardToStrings`: width
  * and height come from the input, so tests can use small boards where a full
- * 10x22 field would only obscure the point.
+ * 10x22 field would only obscure the point. `G` is a garbage block.
  */
 export function boardFromStrings(rows: readonly string[]): Board {
   if (rows.length === 0) {
@@ -223,11 +265,11 @@ export function boardFromStrings(rows: readonly string[]): Board {
         cells.push(null);
         continue;
       }
-      const kind = KIND_BY_CHAR.get(char);
-      if (kind === undefined) {
+      const cell = CELL_BY_CHAR.get(char);
+      if (cell === undefined) {
         throw new Error(`boardFromStrings: '${char}' is not '${EMPTY_CHAR}' or a piece letter`);
       }
-      cells.push(kind);
+      cells.push(cell);
     }
   }
 
