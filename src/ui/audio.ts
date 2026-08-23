@@ -209,6 +209,8 @@ export interface GameAudio {
   muted(): boolean;
   /** Flip the mute and persist it. Returns the new value. */
   toggleMute(): boolean;
+  /** Set whether sound is *on* outright, as the settings dialog's checkbox does. */
+  setSound(on: boolean): void;
   /**
    * Note a user gesture. The first one builds the `AudioContext`; later ones
    * nudge a context the browser has suspended behind our back.
@@ -313,6 +315,19 @@ export function createGameAudio(options: GameAudioOptions = {}): GameAudio {
     }
   }
 
+  /**
+   * Turn sound on or off and persist it. Phrased as "on" because that is what
+   * the stored setting says; the mute is this module's own private inversion.
+   */
+  function setSound(on: boolean): void {
+    muted = !on;
+    options.storage?.write(on);
+    if (on) {
+      // Unmuting is itself a gesture, so it is a fine moment to wake up.
+      onGesture();
+    }
+  }
+
   /** One oscillator, enveloped, connected and scheduled to clean itself up. */
   function schedule(ctx: AudioContext, out: GainNode, tone: ToneSpec, at: number): void {
     const osc = ctx.createOscillator();
@@ -372,14 +387,11 @@ export function createGameAudio(options: GameAudioOptions = {}): GameAudio {
     muted: () => muted,
 
     toggleMute(): boolean {
-      muted = !muted;
-      options.storage?.write(!muted);
-      if (!muted) {
-        // Unmuting is itself a gesture, so it is a fine moment to wake up.
-        onGesture();
-      }
+      setSound(muted);
       return muted;
     },
+
+    setSound,
 
     unlock: onGesture,
 

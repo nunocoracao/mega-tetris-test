@@ -24,10 +24,19 @@ import axe from 'axe-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { cellLabel, defaultDaily, historyCells } from './daily';
-import { createModal, focusableWithin } from './dialog';
-import { createKeyboardInput, type ActionId } from './input';
+import { createModal, focusableWithin, type Modal } from './dialog';
+import {
+  ACTION_IDS,
+  HANDLING_BOUNDS,
+  createKeyboardInput,
+  createLiveBindings,
+  describeBinding,
+  type ActionId,
+  type LiveBindings,
+} from './input';
 import { REPLAY_SPEEDS } from './replay';
-import { createShell, type Shell } from './shell';
+import { createSettingsPanel, type SettingsPanel } from './settings';
+import { applyBindings, createShell, type Shell } from './shell';
 
 let root: HTMLElement;
 let shell: Shell;
@@ -148,6 +157,288 @@ describe('the page axe sees', () => {
     const violations = await audit();
 
     expect(report(violations)).toBe('');
+  });
+});
+
+/**
+ * The settings dialog.
+ *
+ * Audited in all three of its states — closed, open, and waiting for a key —
+ * because the third one is a *mode*, and a mode nothing on the page announces
+ * is a mode that does not exist for a good many players.
+ */
+describe('the settings dialog', () => {
+  let bindings: LiveBindings;
+  let modal: Modal;
+  let panel: SettingsPanel;
+  let announced: string[];
+
+  /** The panel wired to plain in-memory settings — no store, no audio, no CSS. */
+  function build(): void {
+    announced = [];
+    bindings = createLiveBindings();
+    let sound = true;
+    let motion = 'auto';
+    let contrast = 'auto';
+    let pad = 'auto';
+    modal = createModal({
+      element: shell.settingsDialog,
+      background: [...shell.background, shell.pauseDialog, shell.helpDialog],
+      initialFocus: () => shell.settings.panel,
+      onOpen: () => panel.reset(),
+      onClose: () => panel.cancelCapture(),
+    });
+    panel = createSettingsPanel({
+      elements: shell.settings,
+      bindings,
+      sound: { read: () => sound, write: (value) => (sound = value) },
+      motion: {
+        read: () => motion as never,
+        write: (value) => (motion = value),
+      },
+      contrast: {
+        read: () => contrast as never,
+        write: (value) => (contrast = value),
+      },
+      pad: { read: () => pad as never, write: (value) => (pad = value) },
+      announce: (message) => announced.push(message),
+      refresh: () => modal.refresh(),
+      resetAll: () => bindings.setKeyMap(createLiveBindings().table().map),
+    });
+    bindings.listen(() => applyBindings(shell, bindings.table()));
+    applyBindings(shell, bindings.table());
+  }
+
+  /** The "Add key" button of one row. */
+  function bindButton(action: ActionId): HTMLButtonElement {
+    const button = shell.settings.keymap.querySelector<HTMLButtonElement>(
+      `[data-key-bind="${action}"]`,
+    );
+    expect(button, `no bind button for ${action}`).not.toBeNull();
+    return button as HTMLButtonElement;
+  }
+
+  function press(key: string, init: KeyboardEventInit = {}): void {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...init }));
+  }
+
+  beforeEach(build);
+  afterEach(() => {
+    panel.destroy();
+    modal.destroy();
+  });
+
+  it('has no violations while it is open', async () => {
+    modal.open();
+
+    expect(report(await audit())).toBe('');
+  });
+
+  it('has no violations while it is waiting for a key', async () => {
+    modal.open();
+    bindButton('hardDrop').click();
+
+    expect(panel.capturing()).toBe('hardDrop');
+    expect(report(await audit())).toBe('');
+  });
+
+  it('is a real modal dialog with a title', () => {
+    const dialogPanel = shell.settingsDialog.querySelector('[role="dialog"]');
+
+    expect(dialogPanel?.getAttribute('aria-modal')).toBe('true');
+    const labelledBy = dialogPanel?.getAttribute('aria-labelledby') ?? '';
+    expect(document.getElementById(labelledBy)?.textContent?.trim()).toBe('Settings');
+  });
+
+  it('adds no second live region', () => {
+    modal.open();
+
+    expect(root.querySelectorAll('[aria-live]')).toHaveLength(1);
+    // The panel's explanation line is plain text; every sentence it shows also
+    // goes through the game's one polite region.
+    expect(shell.settings.message.hasAttribute('aria-live')).toBe(false);
+  });
+
+  it('traps focus and gives it back to whatever opened it', () => {
+    shell.settingsButton.focus();
+
+    modal.open();
+    expect(shell.settingsDialog.contains(document.activeElement)).toBe(true);
+
+    modal.close();
+    expect(document.activeElement).toBe(shell.settingsButton);
+  });
+
+  it('closes on Escape, even in the middle of a capture', () => {
+    modal.open();
+    bindButton('hold').click();
+    expect(panel.capturing()).toBe('hold');
+
+    shell.settings.panel.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+
+    expect(modal.isOpen()).toBe(false);
+    expect(panel.capturing()).toBeNull();
+  });
+
+  it('gives every action a row, with its own named buttons', () => {
+    const rows = [...shell.settings.keymap.querySelectorAll('li')];
+
+    expect(rows).toHaveLength(ACTION_IDS.length);
+    for (const action of ACTION_IDS) {
+      const name = bindButton(action).getAttribute('aria-label') ?? '';
+      expect(name, `${action} has an unhelpful button name`).toMatch(/Add a key for /);
+      const reset = shell.settings.keymap.querySelector(`[data-key-reset="${action}"]`);
+      expect(reset?.getAttribute('aria-label')).toMatch(/^Reset /);
+    }
+  });
+
+  it('offers a way to take each key off, named after the key and the action', () => {
+    const clear = shell.settings.keymap.querySelector('[data-key-clear]');
+
+    expect(clear?.tagName).toBe('BUTTON');
+    expect(clear?.getAttribute('aria-label')).toBe('Clear ← from Move left');
+  });
+
+  it('captures a key, binds it, and says what it did', () => {
+    modal.open();
+    bindButton('hardDrop').click();
+
+    press('q');
+
+    expect(panel.capturing()).toBeNull();
+    expect(bindings.table().keys('hardDrop')).toEqual([' ', 'Q']);
+    expect(announced.at(-1)).toBe('Q is now Hard drop.');
+  });
+
+  it('refuses a key another action owns, in words rather than a colour', () => {
+    modal.open();
+    bindButton('hold').click();
+
+    press(' ');
+
+    // Still capturing: the player can simply press something else.
+    expect(panel.capturing()).toBe('hold');
+    expect(bindings.table().keys('hold')).toEqual(['C', 'Shift']);
+    const message = shell.settings.message.textContent ?? '';
+    expect(message).toContain('Space');
+    expect(message).toContain('Hard drop');
+    expect(announced.at(-1)).toBe(message);
+  });
+
+  it('refuses Tab and lets it go on moving focus', () => {
+    modal.open();
+    bindButton('hold').click();
+
+    const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    document.dispatchEvent(event);
+
+    expect(panel.capturing()).toBeNull();
+    expect(shell.settings.message.textContent).toMatch(/Tab/);
+  });
+
+  it('refuses a key held with a modifier and keeps waiting', () => {
+    modal.open();
+    bindButton('hold').click();
+
+    press('q', { ctrlKey: true });
+
+    expect(panel.capturing()).toBe('hold');
+    expect(bindings.table().keys('hold')).toEqual(['C', 'Shift']);
+    expect(shell.settings.message.textContent).toMatch(/one key on its own/);
+  });
+
+  it('will not let the last pause key go', () => {
+    bindings.setKeyMap({ ...bindings.table().map, togglePause: ['P'] });
+    modal.open();
+
+    shell.settings.keymap
+      .querySelector<HTMLButtonElement>('[data-key-clear-action="togglePause"]')
+      ?.click();
+
+    expect(bindings.table().keys('togglePause')).toEqual(['P']);
+    expect(shell.settings.message.textContent).toMatch(/at least one key/);
+  });
+
+  it('moves the help panel and the pad with the binding', () => {
+    // The no-drift property, end to end: one table, three views of it, and no
+    // module holding a copy of the key list.
+    modal.open();
+    bindButton('hardDrop').click();
+    press('q');
+
+    const binding = bindings.table().list.find((candidate) => candidate.action === 'hardDrop');
+    expect(binding && describeBinding(binding)).toBe('Space / Q');
+
+    const helpTerms = [...shell.helpBody.querySelectorAll('.help__keys')].map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(helpTerms).toContain('Space / Q');
+
+    const controlTerms = [...shell.controlsList.querySelectorAll('.controls__keys')].map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(controlTerms).toContain('Space / Q');
+
+    const padButton = shell.padButtons.find(
+      (button) => button.dataset['padAction'] === 'hardDrop',
+    );
+    expect(padButton?.title).toBe('Hard drop — Space / Q');
+  });
+
+  it('offers the handling as bounded, labelled, stepped sliders', () => {
+    for (const bound of HANDLING_BOUNDS) {
+      const input = shell.settings.handlingInputs.find(
+        (candidate) => candidate.dataset['handling'] === bound.key,
+      );
+      expect(input, bound.key).toBeDefined();
+      expect(input?.type).toBe('range');
+      expect(input?.min).toBe(String(bound.min));
+      expect(input?.max).toBe(String(bound.max));
+      expect(input?.step).toBe(String(bound.step));
+      // A label, and an explanation the label does not have room for.
+      const label = document.querySelector(`label[for="${input?.id ?? ''}"]`);
+      expect(label?.textContent?.trim()).toBe(bound.label);
+      const hint = document.getElementById(input?.getAttribute('aria-describedby') ?? '');
+      expect(hint?.textContent?.trim()).toBe(bound.hint);
+    }
+  });
+
+  it('takes a slider change straight into the live handling, with its units shown', () => {
+    modal.open();
+    const das = shell.settings.handlingInputs[0] as HTMLInputElement;
+
+    das.value = '60';
+    das.dispatchEvent(new Event('change', { bubbles: true }));
+
+    expect(bindings.handling().dasMs).toBe(60);
+    expect(shell.settings.handlingValues[0]?.textContent).toBe('60 ms');
+  });
+
+  it('groups the cabinet preferences as radios that say which is chosen', () => {
+    modal.open();
+
+    for (const inputs of [
+      shell.settings.motionInputs,
+      shell.settings.contrastInputs,
+      shell.settings.padInputs,
+    ]) {
+      expect(inputs.length).toBe(3);
+      expect(inputs.filter((input) => input.checked)).toHaveLength(1);
+      const legend = inputs[0]?.closest('fieldset')?.querySelector('legend');
+      expect(legend?.textContent?.trim()).not.toBe('');
+    }
+  });
+
+  it('asks before it throws every setting away', () => {
+    modal.open();
+
+    expect(shell.settings.resetConfirm.hidden).toBe(true);
+    shell.settings.resetAsk.click();
+    expect(shell.settings.resetConfirm.hidden).toBe(false);
+    // The safe answer is the one a stray Enter picks.
+    expect(document.activeElement).toBe(shell.settings.resetNo);
   });
 });
 
@@ -292,8 +583,8 @@ describe('structure', () => {
     expect(root.querySelectorAll('[aria-live]')).toHaveLength(1);
   });
 
-  it('marks both dialogs as modal dialogs', () => {
-    for (const dialog of [shell.pauseDialog, shell.helpDialog]) {
+  it('marks all three dialogs as modal dialogs', () => {
+    for (const dialog of [shell.pauseDialog, shell.helpDialog, shell.settingsDialog]) {
       const panel = dialog.querySelector('[role="dialog"]');
       expect(panel).not.toBeNull();
       expect(panel?.getAttribute('aria-modal')).toBe('true');
@@ -427,7 +718,7 @@ describe('tab order', () => {
     // The pad and the overlay start hidden, so this is the shell's own order.
     // In a browser the overlay's Play button joins it after the first paint,
     // between the playfield and the footer — which is still top to bottom.
-    expect(order).toEqual(['Playfield', 'Play', 'Restart', 'Help']);
+    expect(order).toEqual(['Playfield', 'Play', 'Restart', 'Help', 'Settings']);
   });
 
   it('has no positive tabindex anywhere — the DOM order is the order', () => {
@@ -542,6 +833,36 @@ describe('modal behaviour', () => {
     modal.open();
 
     expect(shell.status.closest('[inert]')).toBeNull();
+  });
+});
+
+/**
+ * The keyboard, on the player's own keys.
+ *
+ * `createKeyboardInput` is handed the table rather than reaching for one, and
+ * it re-reads it on every press — so a rebind lands on the very next keystroke
+ * and there is no listener to tear down and rebuild.
+ */
+describe('the keyboard under custom bindings', () => {
+  it('obeys the table it was handed, and follows it when it changes', () => {
+    const bindings = createLiveBindings();
+    const seen: ActionId[] = [];
+    const input = createKeyboardInput({
+      onAction: (action) => seen.push(action),
+      bindings: () => bindings.table(),
+      target: window,
+    });
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }));
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }));
+    expect(seen).toEqual(['hardDrop']);
+
+    bindings.setKeyMap({ ...bindings.table().map, hardDrop: ['Q'] });
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'q' }));
+
+    expect(seen).toEqual(['hardDrop', 'hardDrop']);
+    input.destroy();
   });
 });
 

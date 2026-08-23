@@ -40,6 +40,14 @@ import {
   type DailyEntry,
   type DailyStats,
 } from './daily';
+import {
+  defaultKeyMap,
+  sanitizeHandling,
+  sanitizeKeyMap,
+  type Handling,
+  type KeyMap,
+  DEFAULT_HANDLING,
+} from './input';
 import { parseMotionSetting, type MotionSetting } from './motion';
 import {
   applyRun,
@@ -64,7 +72,7 @@ export const STORAGE_KEY = 'mega-tetris:store';
  * that gets the previous version here — a store written by an older build must
  * keep working, and a player's high score is not something to shrug about.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /** Everything a player can set, as one object. */
 export interface Settings {
@@ -86,6 +94,15 @@ export interface Settings {
    * on every visit should not keep putting a button in the footer.
    */
   readonly installDismissed: boolean;
+  /**
+   * Which keys each action answers to. Stored as *data* — the labels and repeat
+   * modes are ours and are never written down, so this is the smallest thing
+   * that can be said and the easiest to validate. `ui/input.ts` owns both the
+   * default table and the rules for what a legal map is.
+   */
+  readonly bindings: KeyMap;
+  /** DAS, ARR and the soft-drop rate, in milliseconds. */
+  readonly handling: Handling;
 }
 
 export interface StoredData {
@@ -108,6 +125,8 @@ export function defaultSettings(): Settings {
     // has never opened the picker gets.
     mode: 'marathon',
     installDismissed: false,
+    bindings: defaultKeyMap(),
+    handling: DEFAULT_HANDLING,
   };
 }
 
@@ -157,6 +176,12 @@ export function sanitizeSettings(raw: unknown): Settings {
       typeof startLevel === 'number' ? clampStartLevel(startLevel) : defaults.startLevel,
     mode: parseGameMode(source['mode']),
     installDismissed: flag(source['installDismissed'], defaults.installDismissed),
+    // Both owned by `ui/input.ts`, for the same reason the three-way
+    // preferences are owned by their own modules: the rules for what a legal
+    // key map is belong beside the table it is a map of. A corrupt map falls
+    // all the way back to the defaults rather than being half-repaired.
+    bindings: sanitizeKeyMap(source['bindings']),
+    handling: sanitizeHandling(source['handling']),
   };
 }
 
@@ -206,6 +231,12 @@ const MIGRATIONS: Readonly<
   // step exists because the table must have no gaps: a missing entry means
   // "cannot get from there to here", and the data would be dropped.
   4: (data) => data,
+
+  // 5 → 6: the controls became the player's. Nothing moves here either — a
+  // version-5 store is a version-6 store played on the default keys and the
+  // default handling, which is exactly what the sanitiser's defaults say. The
+  // step exists because the table must have no gaps.
+  5: (data) => data,
 };
 
 /** The oldest version we know how to read. Anything older is treated as this. */
@@ -362,8 +393,17 @@ export interface Store {
    * `applyDailyRun`.
    */
   recordDaily(entry: DailyEntry): DailyStats;
-  /** Wipe every best, total and daily result. Settings are untouched. */
+  /**
+   * Wipe every best, total and daily result. **Settings are untouched** — a
+   * key binding is not a score, and a player erasing their record book has not
+   * asked to relearn their own controls.
+   */
   resetStats(): Stats;
+  /**
+   * Put every setting back to its default, bindings and handling included.
+   * The record book is untouched: this is the other half of the pair above.
+   */
+  resetSettings(): Settings;
   /** Are writes actually landing? False in private mode and with storage off. */
   persistent(): boolean;
 }
@@ -486,6 +526,12 @@ export function createStore(options: StoreOptions = {}): Store {
       data = { ...data, stats: defaultStats(), daily: defaultDaily() };
       save();
       return data.stats;
+    },
+
+    resetSettings(): Settings {
+      data = { ...data, settings: defaultSettings() };
+      save();
+      return data.settings;
     },
 
     persistent: () => writable,

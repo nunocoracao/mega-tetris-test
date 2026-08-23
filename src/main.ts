@@ -58,7 +58,7 @@ import {
   menuStatValues,
   runUrgency,
 } from './ui/hud';
-import { createKeyboardInput, normalizeKey, type ActionId } from './ui/input';
+import { createKeyboardInput, createLiveBindings, normalizeKey, type ActionId } from './ui/input';
 import { createLoop } from './ui/loop';
 import { REPLAY_SPEEDS, createReplayViewer, type ReplayRequest } from './ui/replay';
 import { buildShareLink, runShareText } from './ui/share';
@@ -66,7 +66,8 @@ import { createMotionPreference } from './ui/motion';
 import { refreshPalette, watchPalette } from './ui/palette';
 import { createInstallPrompt, registerServiceWorker, syncThemeColor } from './ui/pwa';
 import { createBoardRenderer, createPiecePanelRenderer } from './ui/renderer';
-import { createShell } from './ui/shell';
+import { createSettingsPanel } from './ui/settings';
+import { applyBindings, createShell } from './ui/shell';
 import { clampStartLevel, type StatsUpdate } from './ui/stats';
 import { createStore } from './ui/storage';
 import { createHaptics, createTouchControls } from './ui/touch';
@@ -131,6 +132,20 @@ const hud = createHud(shell);
  * is what keeps the storage format in one file and testable.
  */
 const store = createStore();
+
+/**
+ * The controls, as the player has them.
+ *
+ * `ui/input.ts` owns the default table and the rules; this is the live copy
+ * every consumer reads — the keyboard per keypress, the auto-repeat clocks per
+ * frame, and the three places that *print* the keys whenever it changes. There
+ * is no second copy of the list anywhere, which is why rebinding "hard drop"
+ * moves the help panel, the controls card and the pad's tooltip together.
+ */
+const bindings = createLiveBindings({
+  keys: store.access('bindings'),
+  handling: store.access('handling'),
+});
 
 /**
  * How much movement the player wants, from the operating system and from the
@@ -310,7 +325,7 @@ function draw(): void {
     // A dialog is the conversation while it is open; two "Paused" panels
     // stacked on top of each other is one too many. A replay owns the well
     // outright, and the bar under it is that conversation.
-    suppressOverlay: replaying || pauseMenu.isOpen() || helpPanel.isOpen(),
+    suppressOverlay: replaying || menusOpen(),
   });
 
   if (replaying) {
@@ -566,7 +581,11 @@ function dispatch(action: ActionId): void {
   draw();
 }
 
-const input = createKeyboardInput({ onAction: dispatch });
+const input = createKeyboardInput({
+  onAction: dispatch,
+  bindings: () => bindings.table(),
+  handling: () => bindings.handling(),
+});
 
 const haptics = createHaptics();
 
@@ -583,6 +602,9 @@ const touch = createTouchControls({
   // The one setting `touch.ts` owns. Without this it cycles happily and forgets
   // the answer on reload, which is the worst of both.
   storage: store.access('pad'),
+  // The same clock the keyboard reads, so a held ◀ and a held arrow key feel
+  // identical — including after the DAS slider has moved.
+  handling: () => bindings.handling(),
   onAction: dispatch,
   onPreferenceChange(preference, visible) {
     hud.announce(
@@ -620,9 +642,12 @@ let resumeOnMenuClose = true;
 /** Run after the help panel closes: how it hands control back to the pause menu. */
 let afterHelp: (() => void) | null = null;
 
+/** Run after the settings dialog closes: how it hands control back. */
+let afterSettings: (() => void) | null = null;
+
 const pauseMenu = createModal({
   element: shell.pauseDialog,
-  background: [...shell.background, shell.helpDialog],
+  background: [...shell.background, shell.helpDialog, shell.settingsDialog],
   initialFocus: () => shell.pauseResume,
   // Repaint on both edges: opening hides the overlay behind the dialog, and
   // closing brings back whatever the status now calls for.
@@ -644,7 +669,7 @@ const pauseMenu = createModal({
 
 const helpPanel = createModal({
   element: shell.helpDialog,
-  background: [...shell.background, shell.pauseDialog],
+  background: [...shell.background, shell.pauseDialog, shell.settingsDialog],
   initialFocus: () => shell.helpPanel,
   onOpen() {
     store.set('seenHelp', true);
@@ -658,13 +683,80 @@ const helpPanel = createModal({
   },
 });
 
+/**
+ * The settings dialog: the four cabinet preferences, the handling sliders and
+ * the key remapper, in the same modal machinery as the other two.
+ *
+ * It is a dialog and not a screen, which is the whole point — the run behind it
+ * is exactly where it was left, and a player can nudge DAS mid-game and carry
+ * on with the same piece still falling.
+ */
+const settingsMenu = createModal({
+  element: shell.settingsDialog,
+  background: [...shell.background, shell.pauseDialog, shell.helpDialog],
+  initialFocus: () => shell.settings.panel,
+  onOpen() {
+    settingsPanel.reset();
+    draw();
+  },
+  onClose() {
+    // A capture left running would go on eating keys with nothing to put them
+    // in. It ends with the dialog, whichever way the dialog ended.
+    settingsPanel.cancelCapture();
+    const next = afterSettings;
+    afterSettings = null;
+    next?.();
+    draw();
+  },
+});
+
+const settingsPanel = createSettingsPanel({
+  elements: shell.settings,
+  bindings,
+  // Every control writes through the accessor the live module already owns, so
+  // this dialog and the pause menu's quick toggles are two views of one answer.
+  sound: {
+    read: () => !audio.muted(),
+    write: (on) => {
+      audio.setSound(on);
+      applySound();
+    },
+  },
+  motion: {
+    read: () => motion.setting(),
+    write: (setting) => {
+      motion.set(setting);
+      applyMotion();
+      effects.clear();
+      draw();
+    },
+  },
+  contrast: {
+    read: () => contrast.setting(),
+    write: (setting) => {
+      contrast.set(setting);
+      applyContrast();
+      draw();
+    },
+  },
+  pad: {
+    read: () => touch.preference(),
+    write: (preference) => touch.setPreference(preference),
+  },
+  announce: (message) => hud.announce(message),
+  refresh: () => settingsMenu.refresh(),
+  resetAll: resetAllSettings,
+});
+
 function menusOpen(): boolean {
-  return pauseMenu.isOpen() || helpPanel.isOpen();
+  return pauseMenu.isOpen() || helpPanel.isOpen() || settingsMenu.isOpen();
 }
 
 function closeMenus(): void {
   resumeOnMenuClose = false;
   afterHelp = null;
+  afterSettings = null;
+  settingsMenu.close();
   helpPanel.close();
   pauseMenu.close();
   resumeOnMenuClose = true;
@@ -703,6 +795,51 @@ function toggleHelp(): void {
 shell.helpButton.addEventListener('click', () => helpPanel.open());
 shell.helpClose.addEventListener('click', () => helpPanel.close());
 shell.helpDone.addEventListener('click', () => helpPanel.close());
+
+shell.settingsButton.addEventListener('click', () => settingsMenu.open());
+shell.overlaySettings.addEventListener('click', () => settingsMenu.open());
+shell.settings.close.addEventListener('click', () => settingsMenu.close());
+shell.settings.done.addEventListener('click', () => settingsMenu.close());
+
+shell.pauseSettings.addEventListener('click', () => {
+  // Step sideways rather than stacking one modal on another, exactly as the
+  // pause menu's Help button does: the menu steps out, settings takes over,
+  // and the menu comes back when it is done.
+  resumeOnMenuClose = false;
+  pauseMenu.close();
+  afterSettings = () => pauseMenu.open();
+  settingsMenu.open();
+});
+
+/**
+ * Put every setting back to the way it shipped.
+ *
+ * The store is the source of truth, so it is reset first and the live modules
+ * are then told what it now says — rather than each of them being reset on its
+ * own and the store left to catch up. The record book is deliberately not
+ * touched: that is the *other* reset, in the pause menu.
+ */
+function resetAllSettings(): void {
+  const defaults = store.resetSettings();
+  audio.setSound(defaults.sound);
+  motion.set(defaults.motion);
+  contrast.set(defaults.contrast);
+  touch.setPreference(defaults.pad);
+  bindings.setKeyMap(defaults.bindings);
+  bindings.setHandling(defaults.handling);
+  applySound();
+  applyMotion();
+  applyContrast();
+  effects.clear();
+  // The start screen's two pickers are settings as well, and both are markup
+  // that has to be told what the store now says.
+  shell.startLevel.value = String(defaults.startLevel);
+  applyMode();
+  if (state.status === 'ready') {
+    dealGame(createGame({ seed: state.seed, startLevel: defaults.startLevel, mode: defaults.mode }));
+  }
+  draw();
+}
 
 // -- personal bests, and erasing them ---------------------------------------
 
@@ -1202,6 +1339,14 @@ function soundForUrgency(): void {
 
 const loop = createLoop({
   onFrame(deltaMs) {
+    // The try-it strip is the one thing inside a dialog that has to keep
+    // ticking, and it ticks before every other branch — it is the handling
+    // sliders' output, and a block that only moved on a repaint would be
+    // showing the frame rate rather than the setting.
+    if (settingsMenu.isOpen()) {
+      settingsPanel.update(deltaMs);
+    }
+
     // A replay owns the frame outright: no input, no countdown, and above all
     // no `update` on the live game — the run behind the viewer is exactly where
     // the player left it, and watching a recording must not cost them a piece.
@@ -1521,6 +1666,15 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
+/**
+ * Republish the bindings into the three places that print them — the controls
+ * card, the help panel and the pad's tooltips — now, and again whenever a key
+ * moves. None of them holds a copy, so this is the whole of "rebinding hard
+ * drop changes what the help panel says".
+ */
+bindings.listen(() => applyBindings(shell, bindings.table()));
+applyBindings(shell, bindings.table());
+
 applyMotion();
 applySound();
 applyContrast();
@@ -1563,9 +1717,13 @@ if (import.meta.env.DEV) {
     menus: () => ({
       pause: pauseMenu.isOpen(),
       help: helpPanel.isOpen(),
+      settings: settingsMenu.isOpen(),
+      capturing: settingsPanel.capturing(),
       countdown: countdown.digit(),
     }),
     openHelp: () => helpPanel.open(),
+    openSettings: () => settingsMenu.open(),
+    bindings: () => ({ map: bindings.table().map, handling: bindings.handling() }),
     closeMenus,
     stats: () => store.stats(),
     settings: () => store.settings(),
