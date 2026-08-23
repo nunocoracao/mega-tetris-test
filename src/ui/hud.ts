@@ -9,6 +9,7 @@
  */
 
 import { VISIBLE_HEIGHT, type GameEvent, type GameState } from '../engine';
+import type { PieceKind, SpinKind } from '../engine';
 import { bestFor, type Best, type RunSummary, type Stats, type StatsUpdate } from './stats';
 import type { Shell } from './shell';
 
@@ -282,6 +283,72 @@ export function playButtonLabel(state: GameState): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Naming a clear
+// ---------------------------------------------------------------------------
+
+/**
+ * What each size of clear is called. Index 0 is unused — a clear of no rows is
+ * not a clear — and the array is the single home of these four words: the
+ * popups, the live region and the help panel all read them from here.
+ */
+export const CLEAR_NAMES = ['', 'single', 'double', 'triple', 'quad'] as const;
+
+/** The sizes of clear that have a name — every clear there can be. */
+export type ClearSize = 1 | 2 | 3 | 4;
+
+export const CLEAR_SIZES: readonly ClearSize[] = [1, 2, 3, 4];
+
+/** The words for a clear that this run of the game is up to. */
+export interface ClearNaming {
+  readonly kind: PieceKind;
+  readonly count: number;
+  readonly spin: SpinKind;
+  readonly backToBack: boolean;
+}
+
+/**
+ * A clear in the game's own words: `"triple"`, `"T-spin double"`,
+ * `"back-to-back quad"`, `"S-spin single"`.
+ *
+ * The engine deliberately does not name anything — it reports a count, a spin
+ * kind and a flag, and this is where those become English. Naming the spin
+ * after the piece that did it is the one place the piece kind matters to the
+ * copy, which is why `rowsCleared` carries it.
+ */
+export function clearName(event: ClearNaming): string {
+  // Clamped rather than guarded: there is no fifth size to fall through to, and
+  // a nonsense count should still come out as words rather than as a blank.
+  const size = CLEAR_NAMES[Math.min(Math.max(event.count, 1), 4) as ClearSize];
+  const spun = event.spin === 'none' ? size : `${event.kind}-spin ${size}`;
+  return event.backToBack ? `back-to-back ${spun}` : spun;
+}
+
+/** A spin that cleared nothing, named: `"T-spin"`. */
+export function spinName(kind: PieceKind): string {
+  return `${kind}-spin`;
+}
+
+/** `4` → `"combo ×4"`. Only ever shown from the second clear of a chain. */
+export function comboName(combo: number): string {
+  return `combo ×${formatNumber(combo)}`;
+}
+
+/**
+ * Combo steps worth interrupting a screen reader for.
+ *
+ * A live region that says "combo ×2, combo ×3, combo ×4" is a live region
+ * nobody survives, so only every fifth step gets through. The rest of the
+ * chain is visible on the well and audible in the rising cue, which is where a
+ * running count belongs.
+ */
+export const COMBO_ANNOUNCE_STEP = 5;
+
+/** Is this combo step one the live region should mention? */
+export function announcesCombo(combo: number): boolean {
+  return combo >= COMBO_ANNOUNCE_STEP && combo % COMBO_ANNOUNCE_STEP === 0;
+}
+
 /**
  * An event as a sentence, or `null` for events not worth interrupting for.
  *
@@ -293,10 +360,19 @@ export function playButtonLabel(state: GameState): string {
  */
 export function describeEvent(event: GameEvent): string | null {
   switch (event.type) {
+    case 'spin':
+      // A spin that cleared rows is about to be announced as the clear it was;
+      // saying "T-spin" and then "T-spin double" is the same news twice.
+      return event.cleared > 0
+        ? null
+        : `${spinName(event.kind)}, ${formatNumber(event.points)} points.`;
     case 'rowsCleared': {
       const lines = event.count === 1 ? '1 line' : `${event.count} lines`;
+      const spun = event.spin === 'none' ? '' : `${spinName(event.kind)}, `;
       const bonus = event.backToBack ? ', back to back' : '';
-      return `${lines} cleared${bonus}, ${formatNumber(event.points)} points.`;
+      // Combos are counted out loud only at milestones — see `announcesCombo`.
+      const combo = announcesCombo(event.combo) ? `, ${comboName(event.combo)}` : '';
+      return `${spun}${lines} cleared${bonus}${combo}, ${formatNumber(event.points)} points.`;
     }
     case 'levelUp':
       return `Level ${formatNumber(event.level)}.`;

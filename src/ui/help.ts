@@ -2,10 +2,12 @@
  * The in-game help panel's content.
  *
  * Every row in it is *derived*, not retyped. The keyboard list comes from
- * `KEY_BINDINGS`, the scoring table from `LINE_CLEAR_POINTS` and the two drop
- * bonuses, so rebinding a key or retuning a score updates the help by itself.
- * A help panel that can drift out of date is worse than no help panel, and the
+ * `KEY_BINDINGS`; the scoring table from `LINE_CLEAR_POINTS`, the two spin
+ * tables, the combo step, the back-to-back multiplier and the two drop bonuses.
+ * Rebinding a key or retuning a score therefore updates the help by itself. A
+ * help panel that can drift out of date is worse than no help panel, and the
  * only reliable way to stop it drifting is to have no second copy of the facts.
+ * The *words* for a clear come from `ui/hud.ts`, which is where copy lives.
  *
  * The gestures are the exception, and named as one: the recogniser in
  * `ui/touch.ts` codes the *thresholds*, not the sentences, so the sentences
@@ -17,7 +19,16 @@
  * in `ui/storage.ts`.
  */
 
-import { HARD_DROP_POINTS, LINE_CLEAR_POINTS, SOFT_DROP_POINTS } from '../engine';
+import {
+  BACK_TO_BACK_MULTIPLIER,
+  COMBO_POINTS,
+  HARD_DROP_POINTS,
+  KICKED_SPIN_POINTS,
+  LINE_CLEAR_POINTS,
+  SOFT_DROP_POINTS,
+  SPIN_POINTS,
+} from '../engine';
+import { CLEAR_NAMES, CLEAR_SIZES } from './hud';
 import { KEY_BINDINGS, describeBinding } from './input';
 
 /** One line of the help: what you do on the left, what happens on the right. */
@@ -48,26 +59,50 @@ export const TOUCH_GESTURES: readonly HelpRow[] = [
   { term: 'Swipe up', detail: 'Hold' },
 ];
 
-/** The scoring table, generated from the engine's own numbers. */
+/** `'single'` → `'Single'`. The names themselves live in `ui/hud.ts`. */
+function titleCase(word: string): string {
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+/**
+ * The scoring table, generated from the engine's own numbers.
+ *
+ * Every figure here — the four clear tiers, both spin tables, the combo step
+ * and the back-to-back multiplier — is read out of `src/engine`, so retuning
+ * the scoring retunes this panel and there is no second copy to fall out of
+ * date. The only thing this file decides is the wording.
+ */
 export function scoringRows(): readonly HelpRow[] {
-  const names: Readonly<Record<1 | 2 | 3 | 4, string>> = {
-    1: 'Single',
-    2: 'Double',
-    3: 'Triple',
-    4: 'Quad',
-  };
-  const clears: readonly HelpRow[] = ([1, 2, 3, 4] as const).map((count) => ({
-    term: `${names[count]} — ${count} ${count === 1 ? 'line' : 'lines'}`,
+  const clears: readonly HelpRow[] = CLEAR_SIZES.map((count) => ({
+    term: `${titleCase(CLEAR_NAMES[count])} — ${count} ${count === 1 ? 'line' : 'lines'}`,
     detail: `${LINE_CLEAR_POINTS[count]} × level`,
+  }));
+  // Every size but the quad: a four-row spin is a shape nothing can make.
+  const spins: readonly HelpRow[] = CLEAR_SIZES.filter((count) => count < 4).map((count) => ({
+    term: `Spin ${CLEAR_NAMES[count]}`,
+    detail: `${SPIN_POINTS[count]} × level, or ${KICKED_SPIN_POINTS[count]} if the turn needed a kick`,
   }));
   return [
     ...clears,
+    ...spins,
+    {
+      term: 'Spin, no lines',
+      detail: `${SPIN_POINTS[0]} × level, or ${KICKED_SPIN_POINTS[0]} if the turn needed a kick`,
+    },
+    {
+      term: 'Combo',
+      detail: `${COMBO_POINTS} × combo × level, from the second clear of a run onwards`,
+    },
+    {
+      term: 'Back to back',
+      detail: `A quad or a spin clear straight after another one scores ${BACK_TO_BACK_MULTIPLIER}×`,
+    },
     { term: 'Soft drop', detail: `${SOFT_DROP_POINTS} per row` },
     { term: 'Hard drop', detail: `${HARD_DROP_POINTS} per row` },
   ];
 }
 
-/** The two mechanics that need a sentence rather than a table row. */
+/** The mechanics that need a sentence rather than a table row. */
 export const MECHANIC_NOTES: readonly HelpRow[] = [
   {
     term: 'Hold',
@@ -77,6 +112,11 @@ export const MECHANIC_NOTES: readonly HelpRow[] = [
   {
     term: 'Ghost',
     detail: 'The hollow outline under the piece is where a hard drop would land it.',
+  },
+  {
+    term: 'Spin',
+    detail:
+      'Turn a piece into a gap it could not have been slid into — the last thing you do before it locks is the rotation, and it can no longer move left, right or down. Any piece can do it, and it scores whether or not it clears.',
   },
 ];
 
@@ -121,7 +161,7 @@ function section(id: string, title: string, rows: readonly HelpRow[], termClass:
 /**
  * The body of the help dialog.
  *
- * Short on purpose: a few sentences and three lists. Anyone who wants a manual
+ * Short on purpose: a few sentences and four lists. Anyone who wants a manual
  * has the README; anyone who is mid-game wants to find one key and get out.
  */
 export function helpBodyMarkup(): string {
@@ -133,6 +173,6 @@ export function helpBodyMarkup(): string {
     ${section('help-keys', 'Keyboard', keyboardRows(), 'help__keys')}
     ${section('help-touch', 'Touch', TOUCH_GESTURES, 'help__term')}
     ${section('help-scoring', 'Scoring', scoringRows(), 'help__term')}
-    ${section('help-mechanics', 'Hold and ghost', MECHANIC_NOTES, 'help__term')}
+    ${section('help-mechanics', 'Hold, ghost and spins', MECHANIC_NOTES, 'help__term')}
   `;
 }

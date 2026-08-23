@@ -53,7 +53,15 @@ export {
   shuffleWithState,
 } from './random';
 
-export type { GameEvent, GameInput, GameOptions, GameState, GameStatus } from './game';
+export type {
+  ActionKind,
+  GameEvent,
+  GameInput,
+  GameOptions,
+  GameState,
+  GameStatus,
+  SpinKind,
+} from './game';
 export {
   applyInput,
   createGame,
@@ -62,12 +70,17 @@ export {
   gravityIntervalMs,
   isResting,
   levelForLines,
+  spinKind,
+  spinTable,
   update,
+  BACK_TO_BACK_MULTIPLIER,
+  COMBO_POINTS,
   DEFAULT_SEED,
   GRAVITY_BASE_MS,
   GRAVITY_FACTOR,
   GRAVITY_FLOOR_MS,
   HARD_DROP_POINTS,
+  KICKED_SPIN_POINTS,
   LINE_CLEAR_DELAY_MS,
   LINE_CLEAR_POINTS,
   LINES_PER_LEVEL,
@@ -75,4 +88,5 @@ export {
   MAX_LOCK_RESETS,
   NEXT_QUEUE_SIZE,
   SOFT_DROP_POINTS,
+  SPIN_POINTS,
 } from './game';

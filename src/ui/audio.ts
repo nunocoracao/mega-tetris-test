@@ -48,6 +48,7 @@ export type SoundCue =
   | 'hardDrop'
   | 'lock'
   | 'clear'
+  | 'spin'
   | 'levelUp'
   | 'gameOver';
 
@@ -80,6 +81,18 @@ export const MAX_VOICES = 16;
 const CLEAR_ROOT_HZ = 392;
 const CLEAR_ROW_INTERVAL = 2 ** (3 / 12);
 
+/**
+ * How far a clear climbs for each step of a combo, and where the climb stops.
+ *
+ * A whole tone per consecutive clear, for eight steps — the cheapest possible
+ * way to make a chain *feel* like a chain. It is the same figure each time, so
+ * there is nothing new to learn; it just keeps going up, and that alone is
+ * enough to make a player want the next one. Capped so a very long combo does
+ * not walk the arpeggio off the top of the piano.
+ */
+const COMBO_INTERVAL = 2 ** (2 / 12);
+const COMBO_MAX_STEPS = 8;
+
 /** Cues with nothing to parameterise are just constant tone lists. */
 const CUES: Readonly<Record<Exclude<SoundCue, 'clear'>, readonly ToneSpec[]>> = {
   // A dry tick. This one fires several times a second, so it stays out of the
@@ -102,6 +115,13 @@ const CUES: Readonly<Record<Exclude<SoundCue, 'clear'>, readonly ToneSpec[]>> = 
     { wave: 'triangle', startHz: 659, endHz: 659, delayMs: 90, durationMs: 110, gain: 0.4 },
     { wave: 'triangle', startHz: 784, endHz: 880, delayMs: 180, durationMs: 220, gain: 0.44 },
   ],
+  // A spin, in one gesture: a tone that turns through itself and lands a
+  // fourth higher than it started. Short, so a spin that goes on to clear is
+  // out of the way before the clear's own figure begins.
+  spin: [
+    { wave: 'triangle', startHz: 494, endHz: 370, delayMs: 0, durationMs: 90, gain: 0.36 },
+    { wave: 'triangle', startHz: 370, endHz: 659, delayMs: 70, durationMs: 160, gain: 0.4 },
+  ],
   // The same shape inverted and slowed down: three notes walking off a cliff.
   gameOver: [
     { wave: 'triangle', startHz: 392, endHz: 392, delayMs: 0, durationMs: 190, gain: 0.42 },
@@ -117,9 +137,10 @@ const CUES: Readonly<Record<Exclude<SoundCue, 'clear'>, readonly ToneSpec[]>> = 
  * lifts the whole thing by a minor third, so a quad is both higher and fuller
  * than a single without needing a different sound.
  */
-function clearTones(rows: number): readonly ToneSpec[] {
+function clearTones(rows: number, combo: number): readonly ToneSpec[] {
   const count = Math.max(1, Math.min(4, Math.floor(rows)));
-  const root = CLEAR_ROOT_HZ * CLEAR_ROW_INTERVAL ** (count - 1);
+  const steps = Math.min(COMBO_MAX_STEPS, Math.max(0, Math.floor(combo) - 1));
+  const root = CLEAR_ROOT_HZ * CLEAR_ROW_INTERVAL ** (count - 1) * COMBO_INTERVAL ** steps;
   // Root, major third, fifth, octave — as many as the clear earned, plus one.
   const ratios = [1, 5 / 4, 3 / 2, 2, 5 / 2];
   const tones: ToneSpec[] = [];
@@ -138,15 +159,20 @@ function clearTones(rows: number): readonly ToneSpec[] {
   return tones;
 }
 
-/** The tones a cue is made of. `rows` only matters for `clear`. */
-export function cueTones(cue: SoundCue, rows = 1): readonly ToneSpec[] {
-  return cue === 'clear' ? clearTones(rows) : CUES[cue];
+/**
+ * The tones a cue is made of.
+ *
+ * `rows` and `combo` only matter for `clear`: how many rows went, and how many
+ * consecutive locks have now cleared something (1 for the first of a chain).
+ */
+export function cueTones(cue: SoundCue, rows = 1, combo = 1): readonly ToneSpec[] {
+  return cue === 'clear' ? clearTones(rows, combo) : CUES[cue];
 }
 
 /** How long a cue rings for, in milliseconds — the tail of its last tone. */
-export function cueDurationMs(cue: SoundCue, rows = 1): number {
+export function cueDurationMs(cue: SoundCue, rows = 1, combo = 1): number {
   let end = 0;
-  for (const tone of cueTones(cue, rows)) {
+  for (const tone of cueTones(cue, rows, combo)) {
     end = Math.max(end, tone.delayMs + tone.durationMs);
   }
   return end;
@@ -162,7 +188,7 @@ export function cueDurationMs(cue: SoundCue, rows = 1): number {
 
 export interface GameAudio {
   /** Play a cue. Silently does nothing while muted or locked. */
-  play(cue: SoundCue, rows?: number): void;
+  play(cue: SoundCue, rows?: number, combo?: number): void;
   muted(): boolean;
   /** Flip the mute and persist it. Returns the new value. */
   toggleMute(): boolean;
@@ -304,7 +330,7 @@ export function createGameAudio(options: GameAudioOptions = {}): GameAudio {
   startListening();
 
   return {
-    play(cue: SoundCue, rows = 1): void {
+    play(cue: SoundCue, rows = 1, combo = 1): void {
       if (muted) {
         return;
       }
@@ -321,7 +347,7 @@ export function createGameAudio(options: GameAudioOptions = {}): GameAudio {
         return;
       }
       const at = ctx.currentTime;
-      for (const tone of cueTones(cue, rows)) {
+      for (const tone of cueTones(cue, rows, combo)) {
         schedule(ctx, out, tone, at);
       }
     },

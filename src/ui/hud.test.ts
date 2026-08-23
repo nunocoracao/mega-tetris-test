@@ -1,9 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
-import { applyInput, boardFromStrings, createGame, type GameState } from '../engine';
 import {
+  applyInput,
+  boardFromStrings,
+  createGame,
+  type GameEvent,
+  type GameState,
+} from '../engine';
+import {
+  CLEAR_NAMES,
+  COMBO_ANNOUNCE_STEP,
   MENU_STATS,
+  announcesCombo,
   bestLine,
+  clearName,
+  comboName,
   describeEvent,
   describeHold,
   describePlayfield,
@@ -14,6 +25,7 @@ import {
   menuStatValues,
   overlayContent,
   playButtonLabel,
+  spinName,
   stackHeight,
   summaryLine,
 } from './hud';
@@ -64,13 +76,41 @@ describe('playButtonLabel', () => {
   });
 });
 
+/** A `rowsCleared` event with the boring fields already filled in. */
+function cleared(
+  extra: Partial<Extract<GameEvent, { type: 'rowsCleared' }>> = {},
+): Extract<GameEvent, { type: 'rowsCleared' }> {
+  return {
+    type: 'rowsCleared',
+    kind: 'T',
+    rows: [20],
+    count: 1,
+    quad: false,
+    spin: 'none',
+    combo: 1,
+    backToBack: false,
+    backToBackChain: 0,
+    points: 100,
+    ...extra,
+  };
+}
+
 describe('describeEvent', () => {
   it('announces the things worth hearing', () => {
+    expect(describeEvent(cleared({ rows: [20], count: 1, points: 100 }))).toBe(
+      '1 line cleared, 100 points.',
+    );
     expect(
-      describeEvent({ type: 'rowsCleared', rows: [20], count: 1, quad: false, backToBack: false, points: 100 }),
-    ).toBe('1 line cleared, 100 points.');
-    expect(
-      describeEvent({ type: 'rowsCleared', rows: [17, 18, 19, 20], count: 4, quad: true, backToBack: true, points: 1600 }),
+      describeEvent(
+        cleared({
+          rows: [17, 18, 19, 20],
+          count: 4,
+          quad: true,
+          backToBack: true,
+          backToBackChain: 2,
+          points: 1600,
+        }),
+      ),
     ).toBe('4 lines cleared, back to back, 1,600 points.');
     expect(describeEvent({ type: 'levelUp', level: 3, previousLevel: 2 })).toBe('Level 3.');
     expect(describeEvent({ type: 'gameOver', score: 4200, lines: 21, level: 3 })).toContain('4,200');
@@ -328,5 +368,94 @@ describe('menuStatValues', () => {
     expect(menuStatValues(applyRun(defaultStats(), run({ startLevel: 4 })).stats).headStart).toBe(
       '4,200',
     );
+  });
+});
+
+describe('naming a clear', () => {
+  it('names the four sizes', () => {
+    expect(clearName({ kind: 'T', count: 1, spin: 'none', backToBack: false })).toBe('single');
+    expect(clearName({ kind: 'T', count: 2, spin: 'none', backToBack: false })).toBe('double');
+    expect(clearName({ kind: 'T', count: 3, spin: 'none', backToBack: false })).toBe('triple');
+    expect(clearName({ kind: 'T', count: 4, spin: 'none', backToBack: false })).toBe('quad');
+    expect(CLEAR_NAMES).toHaveLength(5);
+  });
+
+  it('names a spin after the piece that did it', () => {
+    expect(clearName({ kind: 'T', count: 2, spin: 'full', backToBack: false })).toBe(
+      'T-spin double',
+    );
+    expect(clearName({ kind: 'S', count: 1, spin: 'kick', backToBack: false })).toBe(
+      'S-spin single',
+    );
+    expect(spinName('L')).toBe('L-spin');
+  });
+
+  it('puts the chain on the front', () => {
+    expect(clearName({ kind: 'I', count: 4, spin: 'none', backToBack: true })).toBe(
+      'back-to-back quad',
+    );
+    expect(clearName({ kind: 'T', count: 3, spin: 'full', backToBack: true })).toBe(
+      'back-to-back T-spin triple',
+    );
+  });
+
+  it('does not fall off the end of the table', () => {
+    expect(clearName({ kind: 'T', count: 9, spin: 'none', backToBack: false })).toBe('quad');
+    expect(clearName({ kind: 'T', count: 0, spin: 'none', backToBack: false })).toBe('single');
+  });
+
+  it('counts a combo', () => {
+    expect(comboName(4)).toBe('combo ×4');
+    expect(comboName(1200)).toBe('combo ×1,200');
+  });
+});
+
+describe('what the live region hears about the new scoring', () => {
+  it('names a spin clear, and says so once rather than twice', () => {
+    expect(describeEvent(cleared({ count: 2, spin: 'full', points: 800 }))).toBe(
+      'T-spin, 2 lines cleared, 800 points.',
+    );
+    // The `spin` event that came with it stays quiet, because the clear said it.
+    expect(
+      describeEvent({ type: 'spin', kind: 'T', spin: 'full', cells: [], cleared: 2, points: 0 }),
+    ).toBeNull();
+  });
+
+  it('announces a spin that cleared nothing, because nothing else will', () => {
+    expect(
+      describeEvent({ type: 'spin', kind: 'S', spin: 'kick', cells: [], cleared: 0, points: 100 }),
+    ).toBe('S-spin, 100 points.');
+  });
+
+  it('does not read out every step of a combo', () => {
+    for (let combo = 1; combo < COMBO_ANNOUNCE_STEP; combo += 1) {
+      expect(announcesCombo(combo)).toBe(false);
+      expect(describeEvent(cleared({ combo }))).not.toContain('combo');
+    }
+  });
+
+  it('does mention the milestones', () => {
+    expect(announcesCombo(COMBO_ANNOUNCE_STEP)).toBe(true);
+    expect(announcesCombo(COMBO_ANNOUNCE_STEP * 2)).toBe(true);
+    expect(announcesCombo(COMBO_ANNOUNCE_STEP + 1)).toBe(false);
+    expect(describeEvent(cleared({ combo: COMBO_ANNOUNCE_STEP, points: 300 }))).toBe(
+      `1 line cleared, combo ×${COMBO_ANNOUNCE_STEP}, 300 points.`,
+    );
+  });
+
+  it('puts a spin, a chain and a milestone combo in one sentence', () => {
+    expect(
+      describeEvent(
+        cleared({
+          kind: 'L',
+          count: 2,
+          spin: 'kick',
+          combo: 10,
+          backToBack: true,
+          backToBackChain: 3,
+          points: 1_400,
+        }),
+      ),
+    ).toBe('L-spin, 2 lines cleared, back to back, combo ×10, 1,400 points.');
   });
 });
