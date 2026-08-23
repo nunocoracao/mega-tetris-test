@@ -26,6 +26,14 @@ function stubContext(): CanvasRenderingContext2D & { readonly calls: string[] } 
     (...args: unknown[]): void => {
       calls.push(`${name}(${args.length})`);
     };
+  // The labels are the one drawing call whose *content* is worth asserting —
+  // "T-SPIN DOUBLE" is a claim about the game, not about the canvas — so the
+  // text goes into the record alongside the call.
+  const recordText =
+    (name: string) =>
+    (...args: unknown[]): void => {
+      calls.push(`${name}(${args.length}) ${typeof args[0] === 'string' ? args[0] : ''}`);
+    };
 
   const stub = {
     calls,
@@ -43,8 +51,8 @@ function stubContext(): CanvasRenderingContext2D & { readonly calls: string[] } 
     scale: record('scale'),
     fillRect: record('fillRect'),
     strokeRect: record('strokeRect'),
-    fillText: record('fillText'),
-    strokeText: record('strokeText'),
+    fillText: recordText('fillText'),
+    strokeText: recordText('strokeText'),
     createLinearGradient: (): CanvasGradient =>
       ({ addColorStop: (): void => {} }),
   };
@@ -79,14 +87,24 @@ function filledRows(count: number): { board: Board; rows: number[] } {
   return { board: setCells(createBoard(), updates), rows: rows.slice().sort((a, b) => a - b) };
 }
 
-function clearEvent(rows: readonly number[], quad = false, backToBack = false): GameEvent {
+function clearEvent(
+  rows: readonly number[],
+  quad = false,
+  backToBack = false,
+  extra: Partial<Extract<GameEvent, { type: 'rowsCleared' }>> = {},
+): GameEvent {
   return {
     type: 'rowsCleared',
+    kind: 'T',
     rows,
     count: rows.length,
     quad,
+    spin: 'none',
+    combo: 1,
     backToBack,
+    backToBackChain: quad ? 1 : 0,
     points: rows.length * 100,
+    ...extra,
   };
 }
 
@@ -465,5 +483,137 @@ describe('render', () => {
 
     // Twenty visible rows, greyed in the first frame rather than one by one.
     expect(ctx.calls.filter((call) => call.startsWith('fillRect')).length).toBe(20);
+  });
+});
+
+describe('spins and combos', () => {
+  it('celebrates a spin single as hard as a quad, and harder than a plain single', () => {
+    const plain = makeEffects().effects;
+    const spun = makeEffects().effects;
+    const one = filledRows(1);
+
+    plain.observe([clearEvent(one.rows)], one.board);
+    spun.observe([clearEvent(one.rows, false, false, { spin: 'full' })], one.board);
+
+    expect(spun.particleCount()).toBeGreaterThan(plain.particleCount());
+    expect(spun.shake(24)).not.toBeNull();
+    expect(plain.shake(24)).toBeNull();
+  });
+
+  it('shakes for a long combo even when the clear itself is small', () => {
+    const short = makeEffects().effects;
+    const long = makeEffects().effects;
+    const one = filledRows(1);
+
+    short.observe([clearEvent(one.rows, false, false, { combo: 2 })], one.board);
+    long.observe([clearEvent(one.rows, false, false, { combo: 6 })], one.board);
+
+    expect(short.shake(24)).toBeNull();
+    expect(long.shake(24)).not.toBeNull();
+  });
+
+  it('leans harder on the shake the longer the chain runs', () => {
+    const early = makeEffects().effects;
+    const late = makeEffects().effects;
+    const four = filledRows(4);
+
+    early.observe([clearEvent(four.rows, true, true, { backToBackChain: 2 })], four.board);
+    late.observe([clearEvent(four.rows, true, true, { backToBackChain: 9 })], four.board);
+
+    expect(Math.abs(late.shake(24)!.x)).toBeGreaterThan(Math.abs(early.shake(24)!.x));
+  });
+
+  it('names the clear on the well, in the HUD’s words', () => {
+    const { effects } = makeEffects();
+    const two = filledRows(2);
+
+    effects.observe(
+      [clearEvent(two.rows, false, false, { kind: 'T', count: 2, spin: 'full', combo: 4 })],
+      two.board,
+    );
+    effects.update(16, 800);
+
+    const ctx = stubContext();
+    effects.render(ctx, fieldView());
+    const text = ctx.calls.filter((call) => call.startsWith('fillText')).join(' ');
+
+    expect(text).toContain('T-SPIN DOUBLE');
+    expect(text).toContain('COMBO ×4');
+  });
+
+  it('says nothing about a combo of one', () => {
+    const { effects } = makeEffects();
+    const one = filledRows(1);
+
+    effects.observe([clearEvent(one.rows, false, false, { combo: 1 })], one.board);
+    effects.update(16, 100);
+
+    const ctx = stubContext();
+    effects.render(ctx, fieldView());
+    expect(ctx.calls.filter((call) => call.startsWith('fillText')).join(' ')).not.toContain('COMBO');
+  });
+
+  it('puffs a spin that cleared nothing, off the piece that just went in', () => {
+    const { effects } = makeEffects();
+
+    effects.observe(
+      [
+        {
+          type: 'spin',
+          kind: 'S',
+          spin: 'full',
+          cells: [
+            { x: 4, y: 20 },
+            { x: 5, y: 20 },
+            { x: 4, y: 21 },
+            { x: 5, y: 21 },
+          ],
+          cleared: 0,
+          points: 100,
+        },
+      ],
+      createBoard(),
+    );
+    effects.update(16, 100);
+
+    expect(effects.particleCount()).toBeGreaterThan(0);
+    const ctx = stubContext();
+    effects.render(ctx, fieldView());
+    expect(ctx.calls.filter((call) => call.startsWith('fillText')).join(' ')).toContain('S-SPIN');
+  });
+
+  it('leaves a spin that cleared rows to the clear’s own celebration', () => {
+    const { effects } = makeEffects();
+
+    effects.observe(
+      [{ type: 'spin', kind: 'T', spin: 'full', cells: [{ x: 4, y: 20 }], cleared: 2, points: 0 }],
+      createBoard(),
+    );
+
+    expect(effects.particleCount()).toBe(0);
+  });
+
+  it('keeps a spin still when motion is reduced, but still says what it was', () => {
+    const { effects } = makeEffects(true);
+
+    effects.observe(
+      [{ type: 'spin', kind: 'T', spin: 'kick', cells: [{ x: 4, y: 20 }], cleared: 0, points: 50 }],
+      createBoard(),
+    );
+    effects.update(16, 50);
+
+    expect(effects.particleCount()).toBe(0);
+    const ctx = stubContext();
+    effects.render(ctx, fieldView());
+    expect(ctx.calls.filter((call) => call.startsWith('fillText')).join(' ')).toContain('T-SPIN');
+  });
+
+  it('does not shake for a spin or a combo when motion is reduced', () => {
+    const { effects } = makeEffects(true);
+    const one = filledRows(1);
+
+    effects.observe([clearEvent(one.rows, false, false, { spin: 'full', combo: 8 })], one.board);
+    expect(effects.shake(24)).toBeNull();
+    expect(effects.particleCount()).toBe(0);
   });
 });

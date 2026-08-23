@@ -26,6 +26,11 @@
  * mid-session; every effect asks it as it is created and takes a still,
  * instant variant instead — a held highlight rather than a fade, a jump rather
  * than a count-up, no particles and no shake at all.
+ *
+ * The one import that looks out of place is `./hud`: the floating labels say
+ * "T-SPIN DOUBLE" and "COMBO ×4", and those words are copy. Copy has one home
+ * in this project, and it is the HUD — a popup and a live-region sentence
+ * disagreeing about what just happened would be worse than either.
  */
 
 import {
@@ -38,8 +43,12 @@ import {
   type PieceKind,
   type Point,
 } from '../engine';
+import { clearName, comboName, spinName } from './hud';
 import { getPalette, withAlpha } from './palette';
 import type { FieldView } from './renderer';
+
+/** The clear event, named once so `spawnClear` can take the whole thing. */
+type RowsClearedEvent = Extract<GameEvent, { type: 'rowsCleared' }>;
 
 // ---------------------------------------------------------------------------
 // Tuning
@@ -92,8 +101,9 @@ const FLASH_WASH = 0.6;
 const FLASH_WASH_QUAD = 0.85;
 const FLASH_WASH_STILL = 0.32;
 
-/** Floating score labels alive at once: two per clear, and clears can overlap. */
-const POPUP_CAPACITY = 6;
+/** Floating score labels alive at once: up to three per clear (the points, the
+ *  name and the combo), and clears can overlap. */
+const POPUP_CAPACITY = 9;
 
 const POPUP_MS = 900;
 const POPUP_MS_STILL = 700;
@@ -101,10 +111,28 @@ const POPUP_MS_STILL = 700;
 /** How far a popup rises over its life, in cells. */
 const POPUP_RISE_CELLS = 2.2;
 
-/** Screen shake: how hard, and for how long. Quads only. */
+/**
+ * Screen shake: how hard, and for how long.
+ *
+ * Shaken by the clears that earned it — a quad, a spin clear, or a combo that
+ * has run long enough to be worth noticing — and by nothing else. Each step of
+ * a back-to-back chain or a long combo leans on the amplitude a little harder,
+ * up to a ceiling, so a run of them builds rather than repeating.
+ */
 const SHAKE_MS = 260;
 const SHAKE_AMPLITUDE_CELLS = 0.22;
 const SHAKE_AMPLITUDE_CELLS_B2B = 0.34;
+
+/** How long a combo has to run before it shakes the cabinet on its own. */
+const COMBO_SHAKE_FROM = 3;
+
+/** Extra amplitude per chain step past the first, and where that stops. */
+const CHAIN_AMPLITUDE_STEP = 0.04;
+const SHAKE_AMPLITUDE_MAX = 0.5;
+
+/** Shards a spin that cleared nothing throws off the piece it just placed. */
+const SPIN_SHARDS_PER_CELL = 3;
+const SPIN_SHARD_SPEED = 5;
 
 /** The hard-drop streak behind the piece, and the dust it kicks up on landing. */
 const TRAIL_MS = 220;
@@ -530,15 +558,18 @@ export function createEffects(options: EffectsOptions): Effects {
     return cellAt(board, x, y);
   }
 
-  function spawnClear(
-    board: Board,
-    lock: LockRecord | null,
-    rows: readonly number[],
-    quad: boolean,
-    backToBack: boolean,
-    points: number,
-  ): void {
+  function spawnClear(board: Board, lock: LockRecord | null, event: RowsClearedEvent): void {
     const still = calm();
+    const { rows, points } = event;
+    /**
+     * "Big" is the clear that deserves the loud version of every effect: a
+     * quad, or a spin clear. Both are the hard way to take rows out, and the
+     * shard count, the flash and the shake all read off this one flag rather
+     * than each re-deciding what counts as impressive.
+     */
+    const big = event.quad || event.spin !== 'none';
+    /** How many steps of "keep it going" this clear is riding on. */
+    const chain = Math.max(event.backToBackChain, event.combo);
 
     // The row afterimage: the blocks that went, kept for a moment where they
     // were. This is the part that survives reduced motion, held rather than
@@ -547,10 +578,10 @@ export function createEffects(options: EffectsOptions): Effects {
     if (flash !== null) {
       flash.active = true;
       flash.ageMs = 0;
-      flash.lifeMs = still ? FLASH_MS_STILL : quad ? FLASH_MS_QUAD : FLASH_MS;
+      flash.lifeMs = still ? FLASH_MS_STILL : big ? FLASH_MS_QUAD : FLASH_MS;
       flash.rowCount = Math.min(rows.length, 4);
       flash.boardWidth = Math.min(board.width, 16);
-      flash.big = quad;
+      flash.big = big;
       flash.still = still;
       for (let index = 0; index < flash.rowCount; index += 1) {
         const row = rows[index] ?? 0;
@@ -562,8 +593,8 @@ export function createEffects(options: EffectsOptions): Effects {
     }
 
     if (!still) {
-      const perCell = quad ? SHARDS_PER_CELL_QUAD : SHARDS_PER_CELL;
-      const speed = quad ? SHARD_SPEED_QUAD : SHARD_SPEED;
+      const perCell = big ? SHARDS_PER_CELL_QUAD : SHARDS_PER_CELL;
+      const speed = big ? SHARD_SPEED_QUAD : SHARD_SPEED;
       for (let index = 0; index < Math.min(rows.length, 4); index += 1) {
         const row = rows[index];
         if (row === undefined) {
@@ -580,10 +611,14 @@ export function createEffects(options: EffectsOptions): Effects {
         }
       }
 
-      if (quad) {
+      if (big || event.combo >= COMBO_SHAKE_FROM) {
         shakeAgeMs = 0;
         shakeLifeMs = SHAKE_MS;
-        shakeAmplitude = backToBack ? SHAKE_AMPLITUDE_CELLS_B2B : SHAKE_AMPLITUDE_CELLS;
+        const base = event.backToBack ? SHAKE_AMPLITUDE_CELLS_B2B : SHAKE_AMPLITUDE_CELLS;
+        shakeAmplitude = Math.min(
+          SHAKE_AMPLITUDE_MAX,
+          base + Math.max(0, chain - 1) * CHAIN_AMPLITUDE_STEP,
+        );
       }
     }
 
@@ -595,10 +630,41 @@ export function createEffects(options: EffectsOptions): Effects {
     const centreY = rows.length > 0 ? rowSum / rows.length : board.height / 2;
     const centreX = board.width / 2;
 
-    spawnPopup(centreX, centreY, `+${points}`, quad);
-    if (quad) {
-      spawnPopup(centreX, centreY - 1.4, backToBack ? 'BACK TO BACK' : 'QUAD', true);
+    spawnPopup(centreX, centreY, `+${points}`, big);
+    // The name of the clear, straight from the HUD's copy — a quad, a spin or
+    // a back-to-back is worth reading, a plain single is not.
+    if (big || event.backToBack) {
+      spawnPopup(centreX, centreY - 1.4, clearName(event).toUpperCase(), true);
     }
+    if (event.combo > 1) {
+      spawnPopup(centreX, centreY + 1.4, comboName(event.combo).toUpperCase(), event.combo >= COMBO_SHAKE_FROM);
+    }
+  }
+
+  /**
+   * A spin that cleared nothing: a small puff off the piece that just went in,
+   * and the flat bonus floating up out of it. Deliberately quieter than a
+   * clear — nothing came out of the well — but not silent, because setting one
+   * up is the move the scoring is trying to reward.
+   */
+  function spawnSpin(kind: PieceKind, cells: readonly Point[], points: number): void {
+    let sumX = 0;
+    let sumY = 0;
+    for (const cell of cells) {
+      sumX += cell.x;
+      sumY += cell.y;
+    }
+    const count = Math.max(1, cells.length);
+
+    if (!calm()) {
+      for (const cell of cells) {
+        for (let index = 0; index < SPIN_SHARDS_PER_CELL; index += 1) {
+          spawnShard(cell.x, cell.y, kind, SPIN_SHARD_SPEED, SHARD_LIFE_MS);
+        }
+      }
+    }
+    spawnPopup(sumX / count + 0.5, sumY / count, `+${points}`, false);
+    spawnPopup(sumX / count + 0.5, sumY / count - 1.4, spinName(kind).toUpperCase(), true);
   }
 
   function spawnHardDrop(lock: LockRecord, distance: number): void {
@@ -682,15 +748,16 @@ export function createEffects(options: EffectsOptions): Effects {
           }
           break;
 
+        case 'spin':
+          // A spin that cleared rows gets the clear's celebration instead; two
+          // bursts out of one lock is noise, not emphasis.
+          if (event.cleared === 0) {
+            spawnSpin(event.kind, event.cells, event.points);
+          }
+          break;
+
         case 'rowsCleared':
-          spawnClear(
-            previousBoard,
-            lock,
-            event.rows,
-            event.quad,
-            event.backToBack,
-            event.points,
-          );
+          spawnClear(previousBoard, lock, event);
           break;
 
         case 'levelUp':

@@ -2,7 +2,7 @@
 
 A cheerful falling-block puzzle game that lives entirely in the browser — a
 tiny arcade cabinet at a URL. No backend, no accounts, no install: three static
-files totalling **28 KB gzipped**, and you are playing.
+files totalling **31 KB gzipped**, and you are playing.
 
 **▶ [Play it](https://nunocoracao.github.io/mega-tetris-test/)**
 
@@ -14,13 +14,15 @@ browser.
 
 - **The whole genre, done properly.** Seven pieces from a shuffled bag, wall
   kicks, a ghost showing where the piece will land, soft and hard drop, hold, a
-  five-deep preview, lock delay with a reset cap, levels that speed up, and a
-  seeded piece stream that makes every run reproducible.
+  five-deep preview, lock delay with a reset cap, levels that speed up, spins,
+  combos, a back-to-back chain, and a seeded piece stream that makes every run
+  reproducible.
 - **Plays with a thumb.** Gestures over the well *and* a seven-button on-screen
   pad, both producing exactly the actions the keyboard does.
 - **Feels like something.** Line clears flash and throw shards in their own
-  colours, a quad shakes the cabinet, the score counts up, and every sound is
-  synthesised from oscillators — there is not one media file in the repository.
+  colours, a quad shakes the cabinet, the score counts up, a combo walks the
+  clear cue up the scale, and every sound is synthesised from oscillators —
+  there is not one media file in the repository.
 - **Remembers you.** Personal bests, totals, and four settings, in one
   versioned `localStorage` key that is written on the assumption that storage
   is hostile.
@@ -116,14 +118,15 @@ the pause menu cycles auto → on → off.
 
 ## Scoring
 
-| Event                | Points                     |
-| -------------------- | -------------------------- |
-| Single (1 line)      | 100 × level                |
-| Double (2 lines)     | 300 × level                |
-| Triple (3 lines)     | 500 × level                |
-| Quad (4 lines)       | 800 × level                |
-| Soft drop            | 1 per row                  |
-| Hard drop            | 2 per row                  |
+| Event            | Plain       | Spin        | Kicked spin |
+| ---------------- | ----------- | ----------- | ----------- |
+| No lines         | —           | 100 × level | 50 × level  |
+| Single (1 line)  | 100 × level | 400 × level | 200 × level |
+| Double (2 lines) | 300 × level | 800 × level | 400 × level |
+| Triple (3 lines) | 500 × level | 1200 × level | 600 × level |
+| Quad (4 lines)   | 800 × level | 1600 × level | 900 × level |
+| Soft drop        | 1 per row   |             |             |
+| Hard drop        | 2 per row   |             |             |
 
 | Rule       | Behaviour                                                            |
 | ---------- | -------------------------------------------------------------------- |
@@ -131,10 +134,20 @@ the pause menu cycles auto → on → off.
 | Levels     | One level per 10 lines cleared.                                       |
 | Lock delay | `500ms` once resting, refreshed by a move or rotation, 15 times max.  |
 | Hold       | Swaps the active piece and resets it to spawn; locked until the next piece commits. |
+| Spin       | The last thing that moved the piece was a rotation, **and** it can no longer go left, right or down. Any piece kind; a turn that needed a wall kick is paid from the cheaper column. |
+| Combo      | Consecutive locks that each clear at least one row. `50 × combo × level` from the second clear onwards; a lock that clears nothing resets it. |
+| Back to back | A quad or a spin clear straight after another one scores **1.5×** its base, rounded down. Any plain 1–3 line clear breaks the chain; a lock that clears nothing leaves it alone. |
 | Game over  | A newly spawned piece has nowhere to sit.                             |
 
 The help panel builds both of these tables from the engine's own constants, so
 retuning a score changes the help text with it.
+
+The spin rule turns on one piece of history rather than on the shape of the
+piece, which is why `GameState` carries a `lastAction`. Sliding a piece into a
+slot, soft-dropping into it, or letting gravity carry it the last row all clear
+that flag — only a rotation immediately before the lock counts. A hard drop that
+falls *no* rows is the one exception: it moves nothing, so turning into a slot
+and slamming to confirm still scores the spin.
 
 Starting above level 1 is a **head start**: faster gravity, but ten levels of
 easy scoring skipped. Those runs keep their own personal bests and stay out of
@@ -186,12 +199,12 @@ The production build is three files and no runtime dependencies:
 
 | File         | Raw     | Gzipped     |
 | ------------ | ------- | ----------- |
-| `index.js`   | 69.5 KB | **23.8 KB** |
-| `index.css`  | 18.5 KB | **4.2 KB**  |
-| `index.html` | 1.4 KB  | **0.7 KB**  |
-| **Total**    | 89.5 KB | **28.8 KB** |
+| `index.js`   | 74.0 KB | **25.7 KB** |
+| `index.css`  | 18.9 KB | **4.4 KB**  |
+| `index.html` | 1.5 KB  | **0.7 KB**  |
+| **Total**    | 94.4 KB | **30.8 KB** |
 
-JS + CSS is **28.0 KB gzipped**, against a budget of 100 KB. There is nothing
+JS + CSS is **30.1 KB gzipped**, against a budget of 100 KB. There is nothing
 else to fetch: the favicon is an inline SVG data URI, there are no web fonts,
 no images and no audio files. Re-measure with `npm run build` — Vite prints the
 gzipped figure for every asset.
@@ -241,12 +254,15 @@ file for `Math.random`, `Date.now`, `performance.now`, DOM globals and
 
 ### Events drive the effects, and nothing flows back
 
-Each snapshot carries `events` — `spawn`, `lock`, `hardDrop`, `rowsCleared`,
-`levelUp`, `hold`, `gameOver` — describing only what happened during the call
-that produced it, in game terms with no colours, durations or sounds in them.
-`ui/effects.ts` and `ui/audio.ts` consume those and decide how it feels. The
-arrow only points one way, which is what keeps the rules deterministic and
-every celebration disposable.
+Each snapshot carries `events` — `spawn`, `lock`, `hardDrop`, `spin`,
+`rowsCleared`, `levelUp`, `hold`, `gameOver` — describing only what happened
+during the call that produced it, in game terms with no colours, durations or
+sounds in them. `rowsCleared` says how many rows went, whether it was a spin,
+how long the combo and back-to-back chains are, and what it was worth; it does
+not say "T-spin double", because naming it is copy. `ui/effects.ts` and
+`ui/audio.ts` consume those and decide how it feels. The arrow only points one
+way, which is what keeps the rules deterministic and every celebration
+disposable.
 
 ### The browser layer holds no rules
 
@@ -255,7 +271,9 @@ one job: `renderer.ts` paints a `GameState`, `palette.ts` reads every colour out
 of the stylesheet, `input.ts` and `touch.ts` report intents, `loop.ts` times
 frames, `shell.ts` builds the DOM, `hud.ts` writes the readouts, `dialog.ts` is
 the modal machinery, `storage.ts` is the only file that touches `localStorage`,
-and `stats.ts` is the only place a personal best is decided.
+and `stats.ts` is the only place a personal best is decided. `hud.ts` is also
+the only place a clear gets a *name* — "T-spin double", "combo ×4" — which is
+why `effects.ts` imports it for its floating labels rather than writing its own.
 
 `src/main.ts` is the one file that knows about both halves. It owns the single
 mutable `state` reference, feeds real elapsed milliseconds into `update`, turns
@@ -281,7 +299,7 @@ duplicate.
 
 ## Testing
 
-Around 540 tests, in about three seconds.
+Around 600 tests, in about three seconds.
 
 The engine carries a coverage floor because it is the part that must not rot.
 The browser layer does not, deliberately: the tests there cover the **pure**

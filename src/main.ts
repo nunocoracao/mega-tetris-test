@@ -183,7 +183,14 @@ function setState(nextState: GameState): void {
       }
     } else if (event.type === 'rowsCleared') {
       haptics.clear();
-      audio.play('clear', event.count);
+      // The combo step is what pitches the cue up; the engine counts it.
+      audio.play('clear', event.count, event.combo);
+    } else if (event.type === 'spin') {
+      // A spin that goes on to clear gets the clear's cue; the twist would only
+      // muddy the front of it.
+      if (event.cleared === 0) {
+        audio.play('spin');
+      }
     } else if (event.type === 'hardDrop') {
       audio.play('hardDrop');
     } else if (event.type === 'levelUp') {

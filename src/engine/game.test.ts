@@ -19,7 +19,11 @@ import {
   gravityIntervalMs,
   isResting,
   levelForLines,
+  spinKind,
+  spinTable,
   update,
+  BACK_TO_BACK_MULTIPLIER,
+  COMBO_POINTS,
   GRAVITY_BASE_MS,
   GRAVITY_FLOOR_MS,
   HARD_DROP_POINTS,
@@ -28,8 +32,10 @@ import {
   LINES_PER_LEVEL,
   LOCK_DELAY_MS,
   MAX_LOCK_RESETS,
+  KICKED_SPIN_POINTS,
   NEXT_QUEUE_SIZE,
   SOFT_DROP_POINTS,
+  SPIN_POINTS,
   type GameEvent,
   type GameInput,
   type GameState,
@@ -1042,4 +1048,499 @@ describe('a run that is played to the end', () => {
   it('is deterministic all the way to the top-out', () => {
     expect(stackToTheTop(11)).toEqual(stackToTheTop(11));
   });
+});
+
+// ---------------------------------------------------------------------------
+// Spins, combos and the back-to-back chain
+// ---------------------------------------------------------------------------
+
+/** A board whose bottom rows are these strings, everything above them empty. */
+function boardWithRows(...bottom: readonly string[]): Board {
+  const empty = '.'.repeat(BOARD_WIDTH);
+  return boardFromStrings([
+    ...Array.from({ length: BOARD_HEIGHT - bottom.length }, () => empty),
+    ...bottom,
+  ]);
+}
+
+/**
+ * The T-spin bench.
+ *
+ * The two rows given are the bottom two of the board. In every version of them
+ * the second-to-last row has a three-wide mouth at columns 3–5 with filled
+ * shoulders either side, and the last row has a one-cell gap at column 4 — so a
+ * vertical `T` at column 3 that is turned clockwise drops its nub into that gap
+ * and is then walled in left and right by the stack and floored below by the
+ * board. Rotating is the only way in; sliding one over would not fit.
+ */
+function tSpinBench(row20: string, row21: string): GameState {
+  return {
+    ...playing(),
+    board: boardWithRows(row20, row21),
+    active: { kind: 'T', rotation: 1, x: 3, y: BOARD_HEIGHT - 3 },
+  };
+}
+
+/** Mouth open, and the row below it has a second gap the `T` cannot reach. */
+const SPIN_NO_CLEAR = ['JJJ...JJJ.', 'JJJJ.JJJ.J'] as const;
+/** The bottom row completes; the one above it is a column short. */
+const SPIN_SINGLE = ['JJJ...JJJ.', 'JJJJ.JJJJJ'] as const;
+/** Both rows complete. */
+const SPIN_DOUBLE = ['JJJ...JJJJ', 'JJJJ.JJJJJ'] as const;
+
+/** Turn the piece into the slot and let the lock delay run out on it. */
+function spinAndLock(state: GameState, direction: 'cw' | 'ccw' = 'cw'): GameState {
+  const turned = applyInput(state, { type: direction === 'cw' ? 'rotateCW' : 'rotateCCW' });
+  return update(turned, LOCK_DELAY_MS);
+}
+
+/**
+ * A spin against the *wall*: a `T` turned anticlockwise into the right-hand
+ * column, held up by a block under its nose and stopped on the left by the one
+ * beside it. Nothing near it is close to a full row, so it clears nothing.
+ */
+function wallSpinBench(): GameState {
+  return {
+    ...playing(),
+    board: boardWithRows('.......J.J', '..........', '..........'),
+    active: { kind: 'T', rotation: 2, x: 7, y: BOARD_HEIGHT - 5 },
+  };
+}
+
+/**
+ * A spin that only fitted because it was kicked.
+ *
+ * The `T` is turned clockwise out of column 5. Turning in place and the
+ * leftward kick both hit the stack; the rightward kick fits, which is the
+ * definition of a kicked spin and is scored from the cheaper table.
+ */
+function kickedSpinBench(row20: string): GameState {
+  return {
+    ...playing(),
+    board: boardWithRows(row20, 'JJJJJ..JJJ'),
+    active: { kind: 'T', rotation: 1, x: 4, y: BOARD_HEIGHT - 3 },
+  };
+}
+
+const KICKED_NO_CLEAR = 'JJJJJ...J.';
+const KICKED_SINGLE = 'JJJJJ...JJ';
+
+describe('spins', () => {
+  it('is not a spin when the piece can still move', () => {
+    const bench = tSpinBench(...SPIN_SINGLE);
+    // One row higher, where the mouth is wide open on both sides.
+    const loose = { ...bench, active: { ...bench.active!, y: BOARD_HEIGHT - 4 } };
+    const turned = applyInput(loose, { type: 'rotateCW' });
+    expect(turned.lastAction).toBe('rotate');
+    expect(spinKind(turned.board, turned.active!, turned.lastAction)).toBe('none');
+  });
+
+  it('is a spin when a rotation leaves the piece walled in on the floor', () => {
+    const turned = applyInput(tSpinBench(...SPIN_NO_CLEAR), { type: 'rotateCW' });
+    expect(turned.lastAction).toBe('rotate');
+    expect(spinKind(turned.board, turned.active!, turned.lastAction)).toBe('full');
+  });
+
+  it('scores a flat bonus for a spin that clears nothing', () => {
+    const locked = spinAndLock(tSpinBench(...SPIN_NO_CLEAR));
+    const spin = eventsOfType(locked, 'spin')[0];
+
+    expect(spin?.spin).toBe('full');
+    expect(spin?.kind).toBe('T');
+    expect(spin?.cleared).toBe(0);
+    expect(spin?.points).toBe(SPIN_POINTS[0]);
+    expect(locked.score).toBe(SPIN_POINTS[0]);
+    expect(eventsOfType(locked, 'rowsCleared')).toHaveLength(0);
+    // A spin that cleared nothing is still not a clearing lock: the combo goes.
+    expect(locked.combo).toBe(0);
+  });
+
+  it('scores a spin that clears rows from the spin table, not the plain one', () => {
+    const locked = spinAndLock(tSpinBench(...SPIN_SINGLE));
+    const cleared = eventsOfType(locked, 'rowsCleared')[0];
+
+    expect(cleared?.count).toBe(1);
+    expect(cleared?.spin).toBe('full');
+    expect(cleared?.kind).toBe('T');
+    expect(cleared?.points).toBe(SPIN_POINTS[1]);
+    expect(SPIN_POINTS[1]).toBeGreaterThan(LINE_CLEAR_POINTS[1] ?? 0);
+    // The spin event still fires, but the points are on the clear.
+    expect(eventsOfType(locked, 'spin')[0]?.points).toBe(0);
+    expect(eventsOfType(locked, 'spin')[0]?.cleared).toBe(1);
+    expect(locked.score).toBe(SPIN_POINTS[1]);
+  });
+
+  it('scores a two-row spin from the spin table too', () => {
+    const locked = spinAndLock(tSpinBench(...SPIN_DOUBLE));
+    expect(eventsOfType(locked, 'rowsCleared')[0]?.count).toBe(2);
+    expect(locked.score).toBe(SPIN_POINTS[2]);
+    expect(locked.lines).toBe(2);
+  });
+
+  it('counts a spin against the wall, with the board edge doing the walling', () => {
+    const locked = spinAndLock(wallSpinBench(), 'ccw');
+    const spin = eventsOfType(locked, 'spin')[0];
+
+    expect(spin?.spin).toBe('full');
+    expect(spin?.cleared).toBe(0);
+    // Hard against the right-hand column: it is the wall, not a block, that
+    // stops it moving over.
+    expect(spin?.cells.some((cell) => cell.x === BOARD_WIDTH - 1)).toBe(true);
+    expect(locked.score).toBe(SPIN_POINTS[0]);
+  });
+
+  it('detects a spin for a piece that is not a T', () => {
+    // The same slot, entered by an S turned into it. Nothing in the rule set
+    // names a piece kind, and this is the test that keeps it that way.
+    const board = boardWithRows('JJJ..JJJJJ', 'JJJJ.JJJJJ');
+    const bench: GameState = {
+      ...playing(),
+      board,
+      active: { kind: 'S', rotation: 0, x: 3, y: BOARD_HEIGHT - 3 },
+    };
+    const turned = applyInput(bench, { type: 'rotateCW' });
+    expect(turned.active?.rotation).toBe(1);
+    expect(spinKind(turned.board, turned.active!, turned.lastAction)).not.toBe('none');
+  });
+
+  it('pays a kicked spin from the cheaper table', () => {
+    const locked = spinAndLock(kickedSpinBench(KICKED_NO_CLEAR));
+    const spin = eventsOfType(locked, 'spin')[0];
+
+    expect(spin?.spin).toBe('kick');
+    expect(spin?.points).toBe(KICKED_SPIN_POINTS[0]);
+    expect(locked.score).toBe(KICKED_SPIN_POINTS[0]);
+  });
+
+  it('pays a kicked spin clear from the cheaper table, and still beats a plain clear', () => {
+    const locked = spinAndLock(kickedSpinBench(KICKED_SINGLE));
+    const cleared = eventsOfType(locked, 'rowsCleared')[0];
+
+    expect(cleared?.spin).toBe('kick');
+    expect(cleared?.count).toBe(1);
+    expect(cleared?.points).toBe(KICKED_SPIN_POINTS[1]);
+    expect(KICKED_SPIN_POINTS[1]).toBeGreaterThan(LINE_CLEAR_POINTS[1] ?? 0);
+    expect(SPIN_POINTS[1]).toBeGreaterThan(KICKED_SPIN_POINTS[1] ?? 0);
+  });
+
+  it('multiplies the spin bonus by the level', () => {
+    const bench = { ...tSpinBench(...SPIN_NO_CLEAR), level: 4, startLevel: 4 };
+    expect(spinAndLock(bench).score).toBe((SPIN_POINTS[0] ?? 0) * 4);
+  });
+
+  it('every spin tier out-scores the plain clear of the same size', () => {
+    for (const count of [1, 2, 3, 4] as const) {
+      expect(SPIN_POINTS[count]).toBeGreaterThan(LINE_CLEAR_POINTS[count] ?? 0);
+      expect(KICKED_SPIN_POINTS[count]).toBeGreaterThan(LINE_CLEAR_POINTS[count] ?? 0);
+    }
+  });
+
+  it('picks the table a spin is paid from', () => {
+    expect(spinTable('full')).toBe(SPIN_POINTS);
+    expect(spinTable('kick')).toBe(KICKED_SPIN_POINTS);
+  });
+});
+
+describe('the last action a piece took', () => {
+  it('starts clean on a fresh piece and after a hold', () => {
+    const fresh = playing();
+    expect(fresh.lastAction).toBe('none');
+    const turned = applyInput(fresh, { type: 'rotateCW' });
+    expect(turned.lastAction).toBe('rotate');
+    expect(applyInput(turned, { type: 'hold' }).lastAction).toBe('none');
+  });
+
+  it('records a move, a rotation, a soft drop and gravity', () => {
+    const base = playing();
+    expect(applyInput(base, { type: 'moveLeft' }).lastAction).toBe('move');
+    expect(applyInput(base, { type: 'rotateCW' }).lastAction).toBe('rotate');
+    expect(applyInput(base, { type: 'softDrop' }).lastAction).toBe('drop');
+    expect(update(base, gravityIntervalMs(base.level)).lastAction).toBe('drop');
+  });
+
+  it('is left alone by a move the board refuses', () => {
+    const turned = applyInput(tSpinBench(...SPIN_SINGLE), { type: 'rotateCW' });
+    // Walled in on both sides: neither move can land, so the rotation stands.
+    expect(applyInput(turned, { type: 'moveLeft' }).lastAction).toBe('rotate');
+    expect(applyInput(turned, { type: 'moveRight' }).lastAction).toBe('rotate');
+  });
+
+  it('is not disturbed by a hard drop that falls no rows', () => {
+    const turned = applyInput(tSpinBench(...SPIN_SINGLE), { type: 'rotateCW' });
+    const slammed = applyInput(turned, { type: 'hardDrop' });
+    expect(eventsOfType(slammed, 'hardDrop')[0]?.distance).toBe(0);
+    // Turning into the slot and slamming to confirm still counts as a spin.
+    expect(eventsOfType(slammed, 'spin')[0]?.spin).toBe('full');
+  });
+
+  it('is cleared by a hard drop that actually falls', () => {
+    const dropped = applyInput(playing(), { type: 'rotateCW' });
+    expect(applyInput(dropped, { type: 'hardDrop' }).lastAction).toBe('none');
+  });
+});
+
+describe('a piece that moved after it turned', () => {
+  /**
+   * The one shape this rule cannot be tested in is "rotate, slide sideways,
+   * lock walled in" — and it cannot be tested because it cannot happen. A piece
+   * that cannot move left is a piece that cannot have arrived from the left, so
+   * a lock that is walled in on both sides was never slid into. Every real
+   * "moved after turning" case therefore ends in a downward step, which is what
+   * these two cover.
+   */
+  it('does not count as a spin when it soft-dropped into the slot', () => {
+    const bench = tSpinBench(...SPIN_SINGLE);
+    const above = { ...bench, active: { ...bench.active!, y: BOARD_HEIGHT - 4 } };
+    const turned = applyInput(above, { type: 'rotateCW' });
+    const dropped = applyInput(turned, { type: 'softDrop' });
+
+    expect(dropped.lastAction).toBe('drop');
+    const locked = update(dropped, LOCK_DELAY_MS);
+    expect(eventsOfType(locked, 'spin')).toHaveLength(0);
+    // The rows still go — as a plain single, at the plain price.
+    expect(eventsOfType(locked, 'rowsCleared')[0]?.spin).toBe('none');
+    expect(eventsOfType(locked, 'rowsCleared')[0]?.points).toBe(LINE_CLEAR_POINTS[1]);
+  });
+
+  it('does not count as a spin when it was slid sideways and then dropped in', () => {
+    const bench = tSpinBench(...SPIN_SINGLE);
+    const above = { ...bench, active: { ...bench.active!, y: BOARD_HEIGHT - 4 } };
+    const turned = applyInput(above, { type: 'rotateCW' });
+    const slid = applyInput(applyInput(turned, { type: 'moveLeft' }), { type: 'moveRight' });
+    expect(slid.lastAction).toBe('move');
+    expect(slid.active).toEqual(turned.active);
+
+    const locked = update(applyInput(slid, { type: 'softDrop' }), LOCK_DELAY_MS);
+    expect(eventsOfType(locked, 'spin')).toHaveLength(0);
+  });
+
+  it('does not count as a spin when gravity carried it the last row', () => {
+    const bench = tSpinBench(...SPIN_SINGLE);
+    const above = { ...bench, active: { ...bench.active!, y: BOARD_HEIGHT - 4 } };
+    const turned = applyInput(above, { type: 'rotateCW' });
+    const fallen = update(turned, gravityIntervalMs(turned.level));
+    expect(fallen.active?.y).toBe(BOARD_HEIGHT - 3);
+
+    const locked = update(fallen, LOCK_DELAY_MS);
+    expect(eventsOfType(locked, 'spin')).toHaveLength(0);
+    expect(eventsOfType(locked, 'rowsCleared')[0]?.spin).toBe('none');
+  });
+});
+
+describe('combos', () => {
+  it('starts at nothing and counts the first clear as one', () => {
+    expect(playing().combo).toBe(0);
+    const cleared = update(pendingClear(1), LOCK_DELAY_MS);
+    expect(cleared.combo).toBe(1);
+    // The first clear of a chain earns no combo bonus.
+    expect(cleared.score).toBe(LINE_CLEAR_POINTS[1]);
+    expect(eventsOfType(cleared, 'rowsCleared')[0]?.combo).toBe(1);
+  });
+
+  it('pays fifty a step, by level, from the second clear onwards', () => {
+    const second = update({ ...pendingClear(1), combo: 1 }, LOCK_DELAY_MS);
+    expect(second.combo).toBe(2);
+    expect(second.score).toBe((LINE_CLEAR_POINTS[1] ?? 0) + COMBO_POINTS);
+
+    const fourthAtLevelThree = update(
+      { ...pendingClear(1, { startLevel: 3 }), combo: 3 },
+      LOCK_DELAY_MS,
+    );
+    expect(fourthAtLevelThree.combo).toBe(4);
+    expect(fourthAtLevelThree.score).toBe((LINE_CLEAR_POINTS[1] ?? 0) * 3 + COMBO_POINTS * 3 * 3);
+  });
+
+  it('builds across consecutive clearing locks', () => {
+    const first = update(pendingClear(1), LOCK_DELAY_MS);
+    // Deal the same setup again, keeping the counter the first clear left.
+    const second = update({ ...pendingClear(1), combo: first.combo }, LOCK_DELAY_MS);
+    const third = update({ ...pendingClear(1), combo: second.combo }, LOCK_DELAY_MS);
+    expect([first.combo, second.combo, third.combo]).toEqual([1, 2, 3]);
+  });
+
+  it('breaks on a lock that clears nothing', () => {
+    const broken = update({ ...restingOnFloor(), combo: 5 }, LOCK_DELAY_MS);
+    expect(eventsOfType(broken, 'rowsCleared')).toHaveLength(0);
+    expect(broken.combo).toBe(0);
+  });
+
+  it('survives a hold, a pause and a resume', () => {
+    const mid = { ...playing(), combo: 4 };
+    expect(applyInput(mid, { type: 'hold' }).combo).toBe(4);
+    const paused = applyInput(mid, { type: 'pause' });
+    expect(paused.combo).toBe(4);
+    expect(applyInput(paused, { type: 'resume' }).combo).toBe(4);
+    // Nothing about a resize reaches the engine at all, but time passing does.
+    expect(update(mid, 16).combo).toBe(4);
+  });
+
+  it('is wiped by a restart', () => {
+    const restarted = applyInput({ ...playing(), combo: 7, backToBackChain: 3 }, { type: 'restart' });
+    expect(restarted.combo).toBe(0);
+    expect(restarted.backToBack).toBe(false);
+    expect(restarted.backToBackChain).toBe(0);
+    expect(restarted.lastAction).toBe('none');
+  });
+});
+
+describe('the back-to-back chain', () => {
+  it('is started by a quad and continued by the next one', () => {
+    const first = update(pendingClear(4), LOCK_DELAY_MS);
+    expect(first.backToBack).toBe(true);
+    expect(first.backToBackChain).toBe(1);
+    expect(eventsOfType(first, 'rowsCleared')[0]?.backToBack).toBe(false);
+
+    const second = update({ ...pendingClear(4), backToBack: true, backToBackChain: 1 }, LOCK_DELAY_MS);
+    const event = eventsOfType(second, 'rowsCleared')[0];
+    expect(event?.backToBack).toBe(true);
+    expect(event?.backToBackChain).toBe(2);
+    expect(second.backToBackChain).toBe(2);
+  });
+
+  it('is continued by a spin clear, not only by a quad', () => {
+    const bench = { ...tSpinBench(...SPIN_SINGLE), backToBack: true, backToBackChain: 1 };
+    const locked = spinAndLock(bench);
+    const event = eventsOfType(locked, 'rowsCleared')[0];
+
+    expect(event?.spin).toBe('full');
+    expect(event?.backToBack).toBe(true);
+    expect(event?.backToBackChain).toBe(2);
+    expect(locked.backToBack).toBe(true);
+  });
+
+  it('is started by a spin clear on its own', () => {
+    const locked = spinAndLock(tSpinBench(...SPIN_SINGLE));
+    expect(locked.backToBack).toBe(true);
+    expect(locked.backToBackChain).toBe(1);
+    expect(eventsOfType(locked, 'rowsCleared')[0]?.backToBack).toBe(false);
+  });
+
+  it('is broken by a plain triple', () => {
+    const broken = update(
+      { ...pendingClear(3), backToBack: true, backToBackChain: 4 },
+      LOCK_DELAY_MS,
+    );
+    const event = eventsOfType(broken, 'rowsCleared')[0];
+
+    expect(event?.spin).toBe('none');
+    expect(event?.backToBack).toBe(false);
+    expect(event?.backToBackChain).toBe(0);
+    expect(broken.backToBack).toBe(false);
+    expect(broken.backToBackChain).toBe(0);
+    // And it is paid at the plain price, with no multiplier.
+    expect(broken.score).toBe(LINE_CLEAR_POINTS[3]);
+  });
+
+  it('is left alone by a lock that clears nothing', () => {
+    const quiet = update(
+      { ...restingOnFloor(), backToBack: true, backToBackChain: 2 },
+      LOCK_DELAY_MS,
+    );
+    expect(quiet.backToBack).toBe(true);
+    expect(quiet.backToBackChain).toBe(2);
+  });
+
+  it('multiplies the base by one and a half, rounded down', () => {
+    // 500 x 1.5 is 750 exactly; 300 x 1.5 x level 1 would be 450. The rounding
+    // only shows up on an odd base, so the spin tables are where it is checked.
+    const spun = spinAndLock({
+      ...tSpinBench(...SPIN_SINGLE),
+      backToBack: true,
+      backToBackChain: 1,
+    });
+    expect(spun.score).toBe(Math.floor((SPIN_POINTS[1] ?? 0) * BACK_TO_BACK_MULTIPLIER));
+
+    const quad = update({ ...pendingClear(4), backToBack: true }, LOCK_DELAY_MS);
+    expect(quad.score).toBe(Math.floor((LINE_CLEAR_POINTS[4] ?? 0) * BACK_TO_BACK_MULTIPLIER));
+  });
+});
+
+describe('the exact arithmetic', () => {
+  const CASES: readonly {
+    readonly name: string;
+    readonly state: () => GameState;
+    readonly points: number;
+  }[] = [
+    {
+      name: 'a plain single at level 1',
+      state: () => pendingClear(1),
+      points: 100,
+    },
+    {
+      name: 'a plain quad at level 3',
+      state: () => pendingClear(4, { startLevel: 3 }),
+      points: 2400,
+    },
+    {
+      name: 'a back-to-back quad at level 2',
+      state: () => ({ ...pendingClear(4, { startLevel: 2 }), backToBack: true }),
+      points: 2400,
+    },
+    {
+      name: 'a plain double on the fourth clear of a combo at level 1',
+      state: () => ({ ...pendingClear(2), combo: 3 }),
+      points: 300 + 50 * 3,
+    },
+    {
+      name: 'a plain triple on the sixth clear of a combo at level 2',
+      state: () => ({ ...pendingClear(3, { startLevel: 2 }), combo: 5 }),
+      points: 500 * 2 + 50 * 5 * 2,
+    },
+    {
+      name: 'a back-to-back quad on the third clear of a combo at level 1',
+      state: () => ({ ...pendingClear(4), combo: 2, backToBack: true }),
+      points: 1200 + 50 * 2,
+    },
+  ];
+
+  for (const { name, state, points } of CASES) {
+    it(`scores ${name} as ${points}`, () => {
+      const locked = update(state(), LOCK_DELAY_MS);
+      expect(eventsOfType(locked, 'rowsCleared')[0]?.points).toBe(points);
+      expect(locked.score).toBe(points);
+    });
+  }
+
+  const SPIN_CASES: readonly {
+    readonly name: string;
+    readonly state: () => GameState;
+    readonly points: number;
+  }[] = [
+    {
+      name: 'a full spin single at level 1',
+      state: () => tSpinBench(...SPIN_SINGLE),
+      points: 400,
+    },
+    {
+      name: 'a full spin double at level 2',
+      state: () => ({ ...tSpinBench(...SPIN_DOUBLE), level: 2, startLevel: 2 }),
+      points: 1600,
+    },
+    {
+      name: 'a back-to-back full spin single on the second clear of a combo',
+      state: () => ({ ...tSpinBench(...SPIN_SINGLE), backToBack: true, combo: 1 }),
+      points: 600 + 50,
+    },
+    {
+      name: 'a full spin that clears nothing at level 5',
+      state: () => ({ ...tSpinBench(...SPIN_NO_CLEAR), level: 5, startLevel: 5 }),
+      points: 500,
+    },
+    {
+      name: 'a kicked spin that clears nothing at level 2',
+      state: () => ({ ...kickedSpinBench(KICKED_NO_CLEAR), level: 2, startLevel: 2 }),
+      points: 100,
+    },
+    {
+      name: 'a kicked spin single at level 3',
+      state: () => ({ ...kickedSpinBench(KICKED_SINGLE), level: 3, startLevel: 3 }),
+      points: 600,
+    },
+  ];
+
+  for (const { name, state, points } of SPIN_CASES) {
+    it(`scores ${name} as ${points}`, () => {
+      expect(spinAndLock(state()).score).toBe(points);
+    });
+  }
 });

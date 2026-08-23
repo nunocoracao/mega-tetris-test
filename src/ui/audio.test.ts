@@ -9,6 +9,7 @@ const CUES: readonly SoundCue[] = [
   'hardDrop',
   'lock',
   'clear',
+  'spin',
   'levelUp',
   'gameOver',
 ];
@@ -17,7 +18,9 @@ function allTones(): ToneSpec[] {
   const tones: ToneSpec[] = [];
   for (const cue of CUES) {
     for (let rows = 1; rows <= 4; rows += 1) {
-      tones.push(...cueTones(cue, rows));
+      for (const combo of [1, 2, 5, 9, 40]) {
+        tones.push(...cueTones(cue, rows, combo));
+      }
     }
   }
   return tones;
@@ -101,5 +104,43 @@ describe('cueDurationMs', () => {
       expect(cueDurationMs(cue, 4)).toBeGreaterThan(150);
       expect(cueDurationMs(cue, 4)).toBeLessThan(1000);
     }
+  });
+});
+
+describe('the combo climb', () => {
+  /** The lowest note a cue starts on — what the ear reads as its pitch. */
+  function rootHz(rows: number, combo: number): number {
+    return Math.min(...cueTones('clear', rows, combo).map((tone) => tone.startHz));
+  }
+
+  it('lifts the clear a step for every consecutive one', () => {
+    const first = rootHz(1, 1);
+    const second = rootHz(1, 2);
+    const third = rootHz(1, 3);
+
+    expect(second).toBeGreaterThan(first);
+    expect(third).toBeGreaterThan(second);
+    // The same interval each time — one figure walking up, not a new tune.
+    expect(second / first).toBeCloseTo(third / second, 10);
+  });
+
+  it('starts a chain where an unchained clear starts', () => {
+    expect(rootHz(2, 1)).toBe(rootHz(2, 0));
+    expect(rootHz(2, 1)).toBeCloseTo(cueTones('clear', 2)[0]?.startHz ?? 0, 10);
+  });
+
+  it('stops climbing before it runs off the top of the keyboard', () => {
+    expect(rootHz(4, 50)).toBe(rootHz(4, 100));
+    expect(rootHz(4, 50)).toBeLessThan(2000);
+  });
+
+  it('still says how many rows went, at any point in a chain', () => {
+    expect(rootHz(4, 6)).toBeGreaterThan(rootHz(1, 6));
+  });
+
+  it('gives a spin its own short gesture', () => {
+    const spin = cueTones('spin');
+    expect(spin.length).toBeGreaterThan(1);
+    expect(cueDurationMs('spin')).toBeLessThan(cueDurationMs('clear', 1));
   });
 });

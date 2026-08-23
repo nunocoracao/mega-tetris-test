@@ -74,6 +74,53 @@ export const LINE_CLEAR_POINTS: Readonly<Record<number, number>> = {
   4: 800,
 };
 
+/**
+ * Base score for a **spin** clear — a piece that turned into its slot and was
+ * boxed in when it locked — before the level multiplier. Index 0 is the flat
+ * bonus for a spin that completed no rows at all: it cleared nothing, but it
+ * was still the hard way to place that piece.
+ *
+ * Every entry beats `LINE_CLEAR_POINTS` for the same number of rows, which is
+ * the whole point: the clever clear must pay better than the fast one.
+ */
+export const SPIN_POINTS: Readonly<Record<number, number>> = {
+  0: 100,
+  1: 400,
+  2: 800,
+  3: 1200,
+  4: 1600,
+};
+
+/**
+ * The same table for a **kicked** spin — one that only fitted because a wall
+ * kick shoved it sideways or upwards on the way round. Turning a piece in a
+ * hole it already fits is the harder trick, so the kicked version is worth
+ * roughly half, and still beats the plain clear of the same size.
+ */
+export const KICKED_SPIN_POINTS: Readonly<Record<number, number>> = {
+  0: 50,
+  1: 200,
+  2: 400,
+  3: 600,
+  4: 900,
+};
+
+/**
+ * Points per step of a combo, before the level multiplier.
+ *
+ * The first clear of a chain scores nothing extra — `combo` is 1 there and the
+ * bonus is `COMBO_POINTS * (combo - 1) * level` — so the reward only starts
+ * once the player has kept the chain alive.
+ */
+export const COMBO_POINTS = 50;
+
+/**
+ * What a back-to-back clear multiplies its base by. Rounded **down** to a whole
+ * point (`Math.floor`), so the score is always an integer and never rounds a
+ * player up into a number they did not earn.
+ */
+export const BACK_TO_BACK_MULTIPLIER = 1.5;
+
 /** Points per row for a soft drop. */
 export const SOFT_DROP_POINTS = 1;
 
@@ -126,6 +173,36 @@ export function levelForLines(startLevel: number, lines: number): number {
 export type GameStatus = 'ready' | 'playing' | 'paused' | 'over';
 
 /**
+ * The last thing that successfully happened to the falling piece.
+ *
+ * This exists for exactly one reason: a spin is "the piece turned, and then
+ * locked without moving again", and that is a fact about *history*, not about
+ * the board. It lives in `GameState` rather than in a module-level variable or
+ * a closure so that a snapshot still replays identically — a hidden mutable
+ * "did we just rotate?" flag would make the engine impure and silently break
+ * every replay that started from a mid-game snapshot.
+ *
+ * `none`       — nothing has touched this piece yet: it just spawned, or came
+ *                out of the hold slot.
+ * `move`       — a sideways move landed.
+ * `drop`       — the piece went down: gravity, a soft drop, or a hard drop
+ *                that actually fell. A hard drop of zero rows moves nothing
+ *                and so leaves the previous action standing, which is what
+ *                lets a player turn a piece into its slot and slam to confirm.
+ * `rotate`     — a rotation that turned in place, with no kick.
+ * `kickRotate` — a rotation that only fitted after a wall kick.
+ */
+export type ActionKind = 'none' | 'move' | 'drop' | 'rotate' | 'kickRotate';
+
+/**
+ * How a piece got where it locked.
+ *
+ * `none` — not a spin. `full` — it turned in place and was boxed in.
+ * `kick` — same, but the rotation needed a wall kick to fit.
+ */
+export type SpinKind = 'none' | 'full' | 'kick';
+
+/**
  * Something that just happened, described in game terms only — no colours,
  * durations or sounds. The UI decides how to celebrate; the engine only says
  * what to celebrate.
@@ -138,16 +215,41 @@ export type GameEvent =
   /** A hard drop fell `distance` rows before locking. */
   | { readonly type: 'hardDrop'; readonly kind: PieceKind; readonly distance: number }
   /**
+   * A piece locked as a spin: it turned into place and could not then move
+   * left, right or down. Fires for every spin, whether or not it cleared
+   * anything, so the UI has one signal for "that was a clever placement".
+   *
+   * `cleared` is how many rows it completed — zero for a spin that only set
+   * something up — and `points` is the *flat* spin bonus, which is only
+   * non-zero when `cleared` is zero. A spin that cleared rows is scored, and
+   * described, by the `rowsCleared` event that follows.
+   */
+  | {
+      readonly type: 'spin';
+      readonly kind: PieceKind;
+      readonly spin: 'full' | 'kick';
+      readonly cells: readonly Point[];
+      readonly cleared: number;
+      readonly points: number;
+    }
+  /**
    * Rows came out of the board. `rows` are the board row indices as they were
-   * *before* the collapse, top to bottom. `quad` marks the four-line clear, and
-   * `backToBack` marks a quad that immediately followed another one.
+   * *before* the collapse, top to bottom. `quad` marks the four-line clear,
+   * `spin` says whether the piece turned into its slot, `combo` is how many
+   * consecutive locks have now cleared something (1 for the first),
+   * `backToBack` marks a clear that took the back-to-back bonus, and
+   * `backToBackChain` is how many difficult clears the current chain is up to.
    */
   | {
       readonly type: 'rowsCleared';
+      readonly kind: PieceKind;
       readonly rows: readonly number[];
       readonly count: number;
       readonly quad: boolean;
+      readonly spin: SpinKind;
+      readonly combo: number;
       readonly backToBack: boolean;
+      readonly backToBackChain: number;
       readonly points: number;
     }
   /** The level went up. */
@@ -203,8 +305,28 @@ export interface GameState {
   readonly lockResets: number;
   /** Milliseconds left in the post-clear pause before the next piece spawns. */
   readonly clearDelayMs: number;
-  /** The last clear was a quad, so the next quad is back-to-back. */
+  /**
+   * The last thing that happened to the falling piece. Part of the snapshot on
+   * purpose — see `ActionKind`.
+   */
+  readonly lastAction: ActionKind;
+  /**
+   * Consecutive locks that each cleared at least one row, **this one
+   * included**: 0 between chains, 1 on the first clear, 2 on the second. The
+   * bonus is therefore `COMBO_POINTS * (combo - 1) * level`, which is zero for
+   * the first clear and starts paying from the second. A lock that clears
+   * nothing puts it back to 0; a hold, a pause or a resize do not touch it.
+   */
+  readonly combo: number;
+  /**
+   * A difficult clear — a quad or a spin clear — is standing, so the next
+   * difficult clear takes the back-to-back bonus. Only a *clearing* lock can
+   * change this: a lock that clears nothing leaves the chain alone.
+   */
   readonly backToBack: boolean;
+  /** How many difficult clears the current back-to-back chain is up to; 0 when
+   *  there is no chain. */
+  readonly backToBackChain: number;
   /** Total time advanced while playing. Useful for a UI clock. */
   readonly elapsedMs: number;
   /** What happened during the call that produced this snapshot. */
@@ -233,6 +355,11 @@ function withEvents(state: GameState, events: readonly GameEvent[]): GameState {
   return { ...state, events: events.length === 0 ? NO_EVENTS : events };
 }
 
+/** Which of the two spin tables a spin of this kind is paid from. */
+export function spinTable(spin: Exclude<SpinKind, 'none'>): Readonly<Record<number, number>> {
+  return spin === 'full' ? SPIN_POINTS : KICKED_SPIN_POINTS;
+}
+
 /** Could `piece` sit `(dx, dy)` away from where it is now? */
 function fits(board: Board, piece: ActivePiece, dx: number, dy: number): boolean {
   return isValidPosition(board, { ...piece, x: piece.x + dx, y: piece.y + dy });
@@ -250,6 +377,30 @@ export function dropDistance(board: Board, piece: ActivePiece): number {
     distance += 1;
   }
   return distance;
+}
+
+/**
+ * Was this lock a spin?
+ *
+ * Two conditions, and deliberately no piece-specific ones: the last thing that
+ * moved the piece was a rotation, and from where it now sits it cannot go
+ * left, right or down. That is the generic shape of "it was turned into a hole
+ * it could not have been slid into", and it is true of an S wedged under an
+ * overhang exactly as it is of a T in a notch. Special-casing T would be both
+ * more code and a worse rule.
+ *
+ * Checked against the board as it stands *before* the piece is committed, so
+ * the piece is not colliding with its own cells.
+ */
+export function spinKind(board: Board, piece: ActivePiece, lastAction: ActionKind): SpinKind {
+  if (lastAction !== 'rotate' && lastAction !== 'kickRotate') {
+    return 'none';
+  }
+  const boxedIn = !fits(board, piece, -1, 0) && !fits(board, piece, 1, 0) && !fits(board, piece, 0, 1);
+  if (!boxedIn) {
+    return 'none';
+  }
+  return lastAction === 'rotate' ? 'full' : 'kick';
 }
 
 /** Where the active piece would land — the ghost the UI draws under it. */
@@ -294,6 +445,8 @@ function spawnNext(state: GameState, events: GameEvent[]): GameState {
     gravityMs: 0,
     lockMs: 0,
     lockResets: 0,
+    // A fresh piece has no history, so it cannot be a spin until it is turned.
+    lastAction: 'none',
     clearDelayMs: 0,
   };
 
@@ -317,29 +470,63 @@ function lockActive(state: GameState, events: GameEvent[]): GameState {
     return state;
   }
 
-  let board = lockPiece(state.board, piece);
-  events.push({ type: 'lock', kind: piece.kind, cells: pieceCells(piece) });
+  // Ask before committing: `spinKind` needs the board without the piece in it.
+  const spin = spinKind(state.board, piece, state.lastAction);
 
-  let { score, lines, backToBack } = state;
+  let board = lockPiece(state.board, piece);
+  const cells = pieceCells(piece);
+  events.push({ type: 'lock', kind: piece.kind, cells });
+
+  let { score, lines, backToBack, backToBackChain } = state;
   let clearDelayMs = 0;
 
   const rows = findFullRows(board);
-  if (rows.length > 0) {
+  const count = rows.length;
+  // The chain of clearing locks: one longer when this lock cleared, back to
+  // nothing when it did not.
+  const combo = count > 0 ? state.combo + 1 : 0;
+
+  if (spin !== 'none') {
+    // The flat bonus is for a spin that set something up rather than cashing
+    // it in; a spin that cleared rows is paid for by the clear itself.
+    const points = count > 0 ? 0 : (spinTable(spin)[0] ?? 0) * state.level;
+    score += points;
+    events.push({ type: 'spin', kind: piece.kind, spin, cells, cleared: count, points });
+  }
+
+  if (count > 0) {
     board = clearRows(board, rows).board;
-    const count = rows.length;
     const quad = count === 4;
-    const points = (LINE_CLEAR_POINTS[count] ?? 0) * state.level;
+    // A quad or a spin clear is "difficult": it keeps a back-to-back chain
+    // alive, and takes the bonus if one was already standing. Anything else
+    // breaks it.
+    const difficult = quad || spin !== 'none';
+    const bonus = difficult && backToBack;
+
+    const table = spin === 'none' ? LINE_CLEAR_POINTS : spinTable(spin);
+    const base = (table[count] ?? 0) * state.level;
+    // Rounded down, so the score stays a whole number of points.
+    const clearPoints = bonus ? Math.floor(base * BACK_TO_BACK_MULTIPLIER) : base;
+    const comboPoints = COMBO_POINTS * Math.max(0, combo - 1) * state.level;
+    const points = clearPoints + comboPoints;
+
     score += points;
     lines += count;
+    backToBackChain = difficult ? backToBackChain + 1 : 0;
+    backToBack = difficult;
+
     events.push({
       type: 'rowsCleared',
+      kind: piece.kind,
       rows,
       count,
       quad,
-      backToBack: quad && backToBack,
+      spin,
+      combo,
+      backToBack: bonus,
+      backToBackChain,
       points,
     });
-    backToBack = quad;
     clearDelayMs = LINE_CLEAR_DELAY_MS;
   }
 
@@ -355,12 +542,15 @@ function lockActive(state: GameState, events: GameEvent[]): GameState {
     score,
     lines,
     level,
+    combo,
     backToBack,
+    backToBackChain,
     // Hold becomes available again as soon as a piece commits.
     holdLocked: false,
     gravityMs: 0,
     lockMs: 0,
     lockResets: 0,
+    lastAction: 'none',
     clearDelayMs,
   };
 
@@ -411,7 +601,10 @@ export function createGame(options: GameOptions = {}): GameState {
     lockMs: 0,
     lockResets: 0,
     clearDelayMs: 0,
+    lastAction: 'none',
+    combo: 0,
     backToBack: false,
+    backToBackChain: 0,
     elapsedMs: 0,
     events: NO_EVENTS,
     seed,
@@ -475,6 +668,9 @@ export function update(state: GameState, deltaMs: number): GameState {
           ...current,
           gravityMs: gravityMs - interval,
           active: { ...piece, y: piece.y + 1 },
+          // Gravity counts: a piece that was turned and then fell a row was not
+          // spun into where it ends up.
+          lastAction: 'drop',
           lockMs: 0,
         };
       }
@@ -500,7 +696,11 @@ function move(state: GameState, dx: number): GameState {
   if (piece === null || !fits(state.board, piece, dx, 0)) {
     return withEvents(state, NO_EVENTS);
   }
-  const moved: GameState = { ...state, active: { ...piece, x: piece.x + dx } };
+  const moved: GameState = {
+    ...state,
+    active: { ...piece, x: piece.x + dx },
+    lastAction: 'move',
+  };
   return withEvents(refreshLock(moved), NO_EVENTS);
 }
 
@@ -522,7 +722,10 @@ function rotate(state: GameState, direction: RotationDirection): GameState {
       y: piece.y + kick.y,
     };
     if (isValidPosition(state.board, candidate)) {
-      return withEvents(refreshLock({ ...state, active: candidate }), NO_EVENTS);
+      // A kick of (0, 0) is the piece turning where it stands; anything else
+      // had to be shoved to fit, and a spin off it is worth less.
+      const lastAction: ActionKind = kick.x === 0 && kick.y === 0 ? 'rotate' : 'kickRotate';
+      return withEvents(refreshLock({ ...state, active: candidate, lastAction }), NO_EVENTS);
     }
   }
   return withEvents(state, NO_EVENTS);
@@ -539,6 +742,7 @@ function softDrop(state: GameState): GameState {
       ...state,
       active: { ...piece, y: piece.y + 1 },
       score: state.score + SOFT_DROP_POINTS,
+      lastAction: 'drop',
       gravityMs: 0,
       lockMs: 0,
     },
@@ -558,6 +762,10 @@ function hardDrop(state: GameState): GameState {
     ...state,
     active: { ...piece, y: piece.y + distance },
     score: state.score + distance * HARD_DROP_POINTS,
+    // A slam that falls no rows has not moved the piece, so it leaves the
+    // rotation that put it there standing as the last action — which is what
+    // lets a player turn into a slot and hard drop to confirm the spin.
+    lastAction: distance > 0 ? 'drop' : state.lastAction,
   };
   return withEvents(lockActive(landed, events), events);
 }
@@ -599,6 +807,10 @@ function hold(state: GameState): GameState {
     gravityMs: 0,
     lockMs: 0,
     lockResets: 0,
+    // The piece coming out of the slot is a fresh one; it has not been turned.
+    // (`combo` and the back-to-back chain are untouched — a hold is not a lock,
+    // so it neither builds nor breaks either of them.)
+    lastAction: 'none',
   };
 
   if (!isValidPosition(held.board, fresh)) {
