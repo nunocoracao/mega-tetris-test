@@ -23,6 +23,7 @@
 import axe from 'axe-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { cellLabel, defaultDaily, historyCells } from './daily';
 import { createModal, focusableWithin } from './dialog';
 import { createKeyboardInput, type ActionId } from './input';
 import { createShell, type Shell } from './shell';
@@ -64,6 +65,29 @@ async function audit(): Promise<axe.Result[]> {
   return results.violations;
 }
 
+/**
+ * The daily block as `src/main.ts` leaves it — two lines of copy, thirty
+ * labelled cells and a visible copy button. Auditing it empty would audit
+ * nothing, since every string on it is written at runtime.
+ */
+function fillDailyBlock(): void {
+  shell.daily.hidden = false;
+  shell.dailyStatus.textContent = '23 August 2026 — today’s run is waiting.';
+  shell.dailyStreak.textContent = 'Streak: 4 days (longest 9 days).';
+  shell.dailyCopy.hidden = false;
+  shell.dailyFallback.hidden = false;
+  shell.dailyShare.value = 'Mega Tetris — Daily 2026-08-23';
+  const cells = historyCells(defaultDaily(), '2026-08-23');
+  for (const [index, cell] of cells.entries()) {
+    const node = shell.dailyCells[index];
+    const text = node?.querySelector<HTMLElement>('[data-daily-cell-text]');
+    if (node !== undefined && text !== null && text !== undefined) {
+      node.title = cellLabel(cell);
+      text.textContent = cellLabel(cell);
+    }
+  }
+}
+
 describe('the page axe sees', () => {
   it('has no violations with the dialogs closed', async () => {
     const violations = await audit();
@@ -77,6 +101,7 @@ describe('the page axe sees', () => {
     shell.overlay.hidden = false;
     shell.overlayStart.hidden = false;
     shell.overlayHelp.hidden = false;
+    fillDailyBlock();
 
     const violations = await audit();
 
@@ -243,6 +268,49 @@ describe('the mode picker', () => {
     first.click();
 
     expect(clicks).toBe(1);
+  });
+});
+
+describe('the daily challenge block', () => {
+  it('is a list of thirty cells, each with a date and a result in words', () => {
+    fillDailyBlock();
+
+    const cells = [...shell.daily.querySelectorAll('li')];
+    expect(cells).toHaveLength(30);
+    for (const cell of cells) {
+      // Two descriptions, neither of them a colour: the tooltip a mouse gets,
+      // and the sentence a screen reader reads. The tint on the cell is a
+      // fourth-order hint at best, and for some players no hint at all.
+      expect(cell.getAttribute('title')).toMatch(/\d{4}/);
+      expect(cell.textContent?.trim()).toMatch(/\d{4}/);
+    }
+  });
+
+  it('names the strip itself, so thirty cells are not thirty orphans', () => {
+    const strip = shell.daily.querySelector('ol');
+
+    expect(strip?.getAttribute('aria-label')).toBe('Your last 30 days');
+  });
+
+  it('joins the tab order with real buttons when the start screen is up', () => {
+    shell.overlay.hidden = false;
+    shell.overlayStart.hidden = false;
+    fillDailyBlock();
+
+    const order = focusableWithin(root).filter((node) => node.closest('.modal') === null);
+
+    expect(order).toContain(shell.dailyPlay);
+    expect(order).toContain(shell.dailyCopy);
+    expect(shell.dailyPlay.tagName).toBe('BUTTON');
+    expect(shell.dailyCopy.tagName).toBe('BUTTON');
+  });
+
+  it('labels the clipboard fallback field', () => {
+    const label = shell.daily.querySelector(`label[for="${shell.dailyShare.id}"]`);
+
+    expect(shell.dailyShare.id).not.toBe('');
+    expect(label?.textContent?.trim()).not.toBe('');
+    expect(shell.dailyShare.readOnly).toBe(true);
   });
 });
 

@@ -33,6 +33,13 @@
 
 import { parseGameMode, type GameMode } from '../engine';
 import { parseContrastSetting, type ContrastSetting } from './contrast';
+import {
+  applyDailyRun,
+  defaultDaily,
+  sanitizeDaily,
+  type DailyEntry,
+  type DailyStats,
+} from './daily';
 import { parseMotionSetting, type MotionSetting } from './motion';
 import {
   applyRun,
@@ -57,7 +64,7 @@ export const STORAGE_KEY = 'mega-tetris:store';
  * that gets the previous version here — a store written by an older build must
  * keep working, and a player's high score is not something to shrug about.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** Everything a player can set, as one object. */
 export interface Settings {
@@ -79,6 +86,8 @@ export interface StoredData {
   readonly version: number;
   readonly settings: Settings;
   readonly stats: Stats;
+  /** The daily challenge: the streaks, and the last thirty days of results. */
+  readonly daily: DailyStats;
 }
 
 export function defaultSettings(): Settings {
@@ -96,7 +105,12 @@ export function defaultSettings(): Settings {
 }
 
 export function defaultData(): StoredData {
-  return { version: SCHEMA_VERSION, settings: defaultSettings(), stats: defaultStats() };
+  return {
+    version: SCHEMA_VERSION,
+    settings: defaultSettings(),
+    stats: defaultStats(),
+    daily: defaultDaily(),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -171,6 +185,12 @@ const MIGRATIONS: Readonly<
       },
     };
   },
+
+  // 3 → 4: the daily challenge arrived. Nobody who played version 3 has a
+  // streak, because there was nothing to keep one of — so this adds the empty
+  // record rather than inventing history, and every best they *did* set comes
+  // through untouched beside it.
+  3: (data) => ({ ...data, daily: defaultDaily() }),
 };
 
 /** The oldest version we know how to read. Anything older is treated as this. */
@@ -213,6 +233,7 @@ export function migrate(raw: unknown): StoredData {
     version: SCHEMA_VERSION,
     settings: sanitizeSettings(data['settings']),
     stats: sanitizeStats(data['stats']),
+    daily: sanitizeDaily(data['daily']),
   };
 }
 
@@ -318,7 +339,15 @@ export interface Store {
   stats(): Stats;
   /** Fold a finished run into the stats, persist, and say what it broke. */
   recordRun(run: RunSummary): StatsUpdate;
-  /** Wipe every best and total. Settings are untouched. */
+  /** The daily challenge's streaks and history. */
+  daily(): DailyStats;
+  /**
+   * Spend the day's attempt: fold a finished daily run into the record and
+   * persist it. A second run on a date already recorded changes nothing — see
+   * `applyDailyRun`.
+   */
+  recordDaily(entry: DailyEntry): DailyStats;
+  /** Wipe every best, total and daily result. Settings are untouched. */
   resetStats(): Stats;
   /** Are writes actually landing? False in private mode and with storage off. */
   persistent(): boolean;
@@ -428,8 +457,18 @@ export function createStore(options: StoreOptions = {}): Store {
       return update;
     },
 
+    daily: () => data.daily,
+
+    recordDaily(entry: DailyEntry): DailyStats {
+      data = { ...data, daily: applyDailyRun(data.daily, entry) };
+      save();
+      return data.daily;
+    },
+
     resetStats(): Stats {
-      data = { ...data, stats: defaultStats() };
+      // The daily record goes with the bests. A streak that survived "erase
+      // everything" would be the one number on the screen that was a lie.
+      data = { ...data, stats: defaultStats(), daily: defaultDaily() };
       save();
       return data.stats;
     },

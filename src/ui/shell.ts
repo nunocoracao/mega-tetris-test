@@ -23,6 +23,7 @@
  */
 
 import { GAME_MODES } from '../engine';
+import { DAILY_HISTORY_DAYS } from './daily';
 import { helpBodyMarkup } from './help';
 import {
   MENU_STATS,
@@ -63,6 +64,18 @@ export interface Shell {
   readonly overlayRows: HTMLElement;
   /** A footnote under the panel: the personal best, or which ladder applied. */
   readonly overlayNote: HTMLElement;
+  /** The daily challenge block: date, streak, thirty-day strip, its buttons. */
+  readonly daily: HTMLElement;
+  readonly dailyStatus: HTMLElement;
+  readonly dailyStreak: HTMLElement;
+  /** The thirty cells of the strip, oldest first. Filled by `src/main.ts`. */
+  readonly dailyCells: readonly HTMLElement[];
+  /** Starts today's daily, or a practice run once the attempt is spent. */
+  readonly dailyPlay: HTMLButtonElement;
+  readonly dailyCopy: HTMLButtonElement;
+  /** Shown only when the clipboard is unavailable or says no. */
+  readonly dailyFallback: HTMLElement;
+  readonly dailyShare: HTMLTextAreaElement;
   /** The start screen's mode and level pickers. */
   readonly overlayStart: HTMLElement;
   readonly startLevel: HTMLSelectElement;
@@ -241,6 +254,70 @@ function modesMarkup(): string {
 }
 
 /**
+ * The daily challenge's block on the overlay.
+ *
+ * Built once and empty, like every other list on this panel: `src/main.ts`
+ * fills the two lines and the thirty cells whenever the record changes, which
+ * is a handful of times a session rather than sixty times a second.
+ *
+ * The strip is a real `<ol>` of real `<li>`s — thirty days in order is a list,
+ * and saying so costs nothing. Each cell carries **two** descriptions of itself:
+ * a `title` for a mouse, and a visually hidden sentence for a screen reader,
+ * because a `title` alone is not reliably announced and is invisible to a
+ * thumb. The tint is never the only difference between a played day and a
+ * missed one — the stylesheet gives them different shapes as well.
+ */
+function dailyStripMarkup(): string {
+  return Array.from(
+    { length: DAILY_HISTORY_DAYS },
+    (_, index) =>
+      `<li class="daily__cell" data-daily-cell="${index}">
+         <span class="visually-hidden" data-daily-cell-text></span>
+       </li>`,
+  ).join('');
+}
+
+function dailyMarkup(): string {
+  return `
+    <section class="daily" aria-labelledby="daily-title" data-daily hidden>
+      <h2 class="daily__title" id="daily-title">Daily challenge</h2>
+      <p class="daily__status" data-daily-status></p>
+      <ol class="daily__strip" aria-label="Your last ${DAILY_HISTORY_DAYS} days" data-daily-strip>
+        ${dailyStripMarkup()}
+      </ol>
+      <p class="daily__streak" data-daily-streak></p>
+      <div class="daily__actions">
+        <button type="button" class="button button--quiet" data-daily-play>
+          Play today’s daily
+        </button>
+        <button type="button" class="button button--quiet" data-daily-copy hidden>
+          Copy result
+        </button>
+      </div>
+      <!--
+        The clipboard is a permission, not a guarantee: it is absent over plain
+        HTTP, refused in some embedded browsers, and rejected outright if the
+        click did not look like a gesture. When it fails the text appears here
+        instead, selected and ready to copy by hand — which is a fallback rather
+        than an apology.
+      -->
+      <div class="daily__fallback" data-daily-fallback hidden>
+        <label class="daily__fallback-label" for="daily-share">Copy this</label>
+        <!-- A textarea rather than a text input: the shareable line is three
+             lines, and an input strips the newlines out of its own value. -->
+        <textarea
+          class="daily__share"
+          id="daily-share"
+          data-daily-share
+          rows="3"
+          readonly
+        ></textarea>
+      </div>
+    </section>
+  `;
+}
+
+/**
  * The one panel that covers the well: attract screen, paused veil, scoreboard.
  *
  * All three states share this markup and `ui/hud.ts` decides which parts of it
@@ -258,6 +335,7 @@ function overlayMarkup(): string {
       <p class="overlay__hint" data-overlay-hint></p>
       <dl class="runstats" data-overlay-rows hidden>${runStatsMarkup()}</dl>
       <p class="overlay__note" data-overlay-note hidden></p>
+      ${dailyMarkup()}
       <div class="overlay__start" data-overlay-start hidden>
         <div class="modes" role="group" aria-label="Game mode">${modesMarkup()}</div>
         <label class="level" for="start-level">
@@ -333,7 +411,8 @@ function pauseDialogMarkup(): string {
           -->
           <div class="confirm" data-stats-confirm hidden>
             <p class="confirm__text">
-              Erase every personal best and total? This cannot be undone.
+              Erase every personal best, total and daily result? This cannot be
+              undone.
             </p>
             <div class="modal__actions">
               <button type="button" class="button button--primary" data-stats-keep>
@@ -476,6 +555,17 @@ export function createShell(root: HTMLElement): Shell {
     overlayHint: must<HTMLElement>(root, '[data-overlay-hint]'),
     overlayRows: must<HTMLElement>(root, '[data-overlay-rows]'),
     overlayNote: must<HTMLElement>(root, '[data-overlay-note]'),
+    daily: must<HTMLElement>(root, '[data-daily]'),
+    dailyStatus: must<HTMLElement>(root, '[data-daily-status]'),
+    dailyStreak: must<HTMLElement>(root, '[data-daily-streak]'),
+    dailyCells: Array.from(
+      { length: DAILY_HISTORY_DAYS },
+      (_, index) => must<HTMLElement>(root, `[data-daily-cell="${index}"]`),
+    ),
+    dailyPlay: must<HTMLButtonElement>(root, '[data-daily-play]'),
+    dailyCopy: must<HTMLButtonElement>(root, '[data-daily-copy]'),
+    dailyFallback: must<HTMLElement>(root, '[data-daily-fallback]'),
+    dailyShare: must<HTMLTextAreaElement>(root, '[data-daily-share]'),
     overlayStart: must<HTMLElement>(root, '[data-overlay-start]'),
     startLevel: must<HTMLSelectElement>(root, '[data-start-level]'),
     modeButtons: GAME_MODES.map((mode) => must<HTMLButtonElement>(root, `[data-mode="${mode}"]`)),

@@ -193,6 +193,15 @@ const TEXT_PAIRS: readonly Pair[] = [
     bg: '--overlay-veil',
     under: '--well',
   },
+  // The daily challenge's two lines — the date and the streak — sit on the same
+  // veiled well as the hint above them.
+  {
+    what: 'the daily challenge’s lines over the veiled well',
+    fg: '--fg-muted',
+    bg: '--overlay-veil',
+    under: '--well',
+  },
+  { what: 'the shareable line in its fallback box', fg: '--fg', bg: '--panel-canvas' },
 ];
 
 /** Control boundaries and focus rings: WCAG 1.4.11 wants 3:1. */
@@ -211,6 +220,22 @@ const UI_PAIRS: readonly Pair[] = [
   { what: 'the focus ring on the cabinet floor', fg: '--accent', bg: '--cabinet-deep' },
   { what: 'the focus ring on a panel', fg: '--accent', bg: '--panel' },
   { what: 'the focus ring on a control', fg: '--accent', bg: '--panel-hover' },
+  // The thirty-day strip. A missed day is an outline and a played one is a
+  // fill, and both have to be visible on the veil before the shape difference
+  // between them can tell anybody anything.
+  {
+    what: 'a missed day in the daily strip',
+    fg: '--edge',
+    bg: '--overlay-veil',
+    under: '--well',
+  },
+  {
+    what: 'a played day in the daily strip',
+    fg: '--accent',
+    bg: '--overlay-veil',
+    under: '--well',
+  },
+  { what: 'the share fallback’s border on its inset', fg: '--edge', bg: '--panel-canvas' },
 ];
 
 /** The ratio a pair actually achieves in a given palette. */

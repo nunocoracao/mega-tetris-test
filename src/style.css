@@ -658,6 +658,146 @@ body {
   touch-action: manipulation;
 }
 
+/* ----------------------------------------------- the daily challenge -- */
+
+/*
+ * The daily block: what today is, how the streak stands, and thirty small
+ * cells for the thirty days behind it.
+ *
+ * It appears in two of the overlay's three states — on the start screen, where
+ * it is an invitation, and at the end of a daily run, where it is a result with
+ * a copy button. The paused veil never shows it; a player mid-run does not want
+ * to be told about their streak.
+ */
+.daily {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  width: min(17rem, 100%);
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--edge-soft);
+}
+
+.daily__title {
+  margin: 0;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.daily__status,
+.daily__streak {
+  margin: 0;
+  font-size: clamp(0.62rem, 1.8vmin, 0.75rem);
+  color: var(--fg-muted);
+  text-wrap: balance;
+}
+
+/*
+ * Thirty days that **wrap** rather than divide the width.
+ *
+ * A grid of thirty columns fits any width and is useless at most of them: on a
+ * 320px phone the overlay is as wide as the well, which leaves each cell about
+ * six pixels — far too small for the *shape* difference below to be visible,
+ * and the shape is what carries the meaning for anybody who cannot separate the
+ * tints. So the cell has a size of its own and the strip wraps to fit, which
+ * costs a couple of rows on a narrow screen and never costs legibility. The
+ * container is exactly fifteen cells wide, so at full size it lands as two neat
+ * rows of fifteen instead of a ragged sixteen and fourteen.
+ */
+.daily__strip {
+  --daily-cell: clamp(0.62rem, 3.4vmin, 0.85rem);
+  --daily-cell-gap: 0.16rem;
+
+  /* `auto-fill` over a fixed track rather than `1fr`: the cells keep their size
+   * and the *number of columns* is what gives, which is the whole point. The
+   * grid keeps the rows in step, so a part-filled last row still lines up. */
+  display: grid;
+  grid-template-columns: repeat(auto-fill, var(--daily-cell));
+  justify-content: center;
+  gap: var(--daily-cell-gap);
+  width: min(calc(15 * var(--daily-cell) + 14 * var(--daily-cell-gap)), 100%);
+  margin: 0.1rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * A day that was missed: a hollow circle. A day that was played: a filled,
+ * squared-off cell, tinted by how the run went. Colour is never the only
+ * difference — the shape, the fill and the per-cell label all say it too.
+ */
+.daily__cell {
+  flex: 0 0 auto;
+  width: var(--daily-cell);
+  height: var(--daily-cell);
+  border: 1px solid var(--edge);
+  border-radius: 50%;
+  background: none;
+}
+
+.daily__cell[data-played='yes'] {
+  border-radius: 0.2rem;
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+/* Four bands against the best day in the window. See `tierFor` in ui/daily.ts. */
+.daily__cell[data-tier='1'] {
+  opacity: 0.4;
+}
+
+.daily__cell[data-tier='2'] {
+  opacity: 0.6;
+}
+
+.daily__cell[data-tier='3'] {
+  opacity: 0.8;
+}
+
+/* Today, played or not: a ring around it, so the strip has a "you are here". */
+.daily__cell[data-today='yes'] {
+  box-shadow: 0 0 0 2px var(--fg-muted);
+}
+
+.daily__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.35rem;
+}
+
+.daily__fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 100%;
+}
+
+.daily__fallback-label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.daily__share {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: var(--control-border-width) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--panel-canvas);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  resize: none;
+}
+
 /* --------------------------------------------------------------- panels -- */
 
 .panel {
