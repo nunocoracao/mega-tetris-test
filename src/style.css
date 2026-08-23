@@ -312,10 +312,10 @@ body {
  */
 .game {
   display: grid;
-  /* Header, body, actions, update, pad. The last two rows are `auto`, so when
-   * they are hidden they collapse to nothing and the layout is exactly what it
-   * was before. */
-  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  /* Header, body, actions, replay bar, update, pad. The last three rows are
+   * `auto`, so when they are hidden they collapse to nothing and the layout is
+   * exactly what it was before. */
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto auto;
   justify-items: center;
   gap: var(--gap);
   width: 100%;
@@ -432,6 +432,172 @@ body {
 
 .update[hidden] {
   display: none;
+}
+
+/* --------------------------------------------------------------- replays -- */
+
+/*
+ * A replay is an ordinary `GameState` being painted by the ordinary renderer,
+ * which is exactly what makes this section only chrome: not one line of the
+ * canvas code knows a replay from a live game.
+ *
+ * What the *player* must never have to wonder is which of the two they are
+ * looking at. Three things say so at once, and none of them is only a colour:
+ * the well takes an orchid ring in place of its violet glow, a badge sits in
+ * the corner of the field, and the bar below names the run. The root's
+ * `data-replay` attribute is the switch, and it is set from `src/main.ts`
+ * beside every other published decision.
+ */
+:root[data-replay='on'] .playfield {
+  box-shadow:
+    inset 0 0 0 1px var(--piece-t),
+    0 0 0 2px var(--piece-t),
+    0 1.5rem 3.5rem -1.5rem var(--glow),
+    0 0 2.5rem -0.75rem var(--glow);
+}
+
+.field-badge {
+  position: absolute;
+  z-index: 2;
+  top: calc(var(--bezel) + 0.3rem);
+  right: calc(var(--bezel) + 0.3rem);
+  margin: 0;
+  padding: 0.14rem 0.42rem;
+  border-radius: var(--radius-sm);
+  background: var(--piece-t);
+  color: var(--cabinet-deep);
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+/* Under the actions, like the update notice, and for the same reason: nothing
+ * that covers the well is allowed, and a replay is entirely about the well. */
+.replay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  width: 100%;
+  max-width: 32rem;
+  padding: 0.45rem 0.7rem;
+  border: var(--control-border-width) solid var(--piece-t);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  text-align: center;
+}
+
+.replay__heading {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--fg);
+}
+
+.replay__badge {
+  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-sm);
+  background: var(--piece-t);
+  color: var(--cabinet-deep);
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.replay__detail {
+  margin: 0;
+  font-size: 0.66rem;
+  color: var(--fg-muted);
+  text-wrap: balance;
+}
+
+/* The progress bar is decorative — `aria-hidden` — because the time beside it
+ * says the same thing in words, and words are what a screen reader can use. */
+.replay__track {
+  width: 100%;
+  height: 0.25rem;
+  border-radius: 999px;
+  background: var(--panel-canvas);
+  box-shadow: inset 0 0 0 1px var(--edge-soft);
+  overflow: hidden;
+}
+
+.replay__fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: var(--piece-t);
+}
+
+.replay__time {
+  margin: 0;
+  font-family: var(--font-numeric);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.66rem;
+  color: var(--fg-muted);
+}
+
+.replay__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+}
+
+.replay__speeds {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.replay__speed[aria-pressed='true'] {
+  border-color: var(--piece-t);
+  background: var(--panel-hover);
+  color: var(--fg);
+}
+
+/* ---------------------------------------------------- sharing a run ------ */
+
+.overlay__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+}
+
+.share {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: min(20rem, 100%);
+  text-align: start;
+}
+
+.share__label {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.share__text {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: var(--control-border-width) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--panel-canvas);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.62rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  resize: none;
 }
 
 .update__text {

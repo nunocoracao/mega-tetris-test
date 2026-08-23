@@ -32,6 +32,34 @@ export function clampDelta(deltaMs: number, maxMs: number = MAX_DELTA_MS): numbe
   return Math.min(deltaMs, maxMs);
 }
 
+/** A whole number of milliseconds, and the fraction still owed. */
+export interface WholeDelta {
+  readonly wholeMs: number;
+  readonly carryMs: number;
+}
+
+/**
+ * Hand the engine whole milliseconds, and keep the change.
+ *
+ * `requestAnimationFrame` deals in fractions — 16.666… at 60Hz — and the game
+ * would happily consume them. **Replays would not.** A run is recorded as
+ * "this input, at this many milliseconds", and a clock that reads 4283.9994
+ * cannot be written down in a link that a friend's browser will rebuild the
+ * same run from. Whole milliseconds make the run clock exactly expressible, and
+ * that is the property the whole replay format rests on.
+ *
+ * The carry is what keeps it honest: the fraction is not dropped, it is saved
+ * and spent on a later frame, so sixty frames of 16.666 still add up to a
+ * thousand milliseconds and the game runs at exactly the speed it always did.
+ *
+ * Pure, so the arithmetic can be tested without a browser.
+ */
+export function splitWholeMs(deltaMs: number, carryMs: number): WholeDelta {
+  const total = (Number.isFinite(deltaMs) && deltaMs > 0 ? deltaMs : 0) + carryMs;
+  const wholeMs = Math.floor(total);
+  return { wholeMs, carryMs: total - wholeMs };
+}
+
 export interface LoopOptions {
   /** Called once per animation frame with the clamped elapsed milliseconds. */
   readonly onFrame: (deltaMs: number) => void;
@@ -57,6 +85,8 @@ export function createLoop(options: LoopOptions): Loop {
   /** The caller wants the loop running; it may still be suspended by hiding. */
   let wanted = false;
   let lastTimestamp: number | null = null;
+  /** Sub-millisecond change from previous frames, owed to a later one. */
+  let carryMs = 0;
 
   function tick(timestamp: number): void {
     frameHandle = requestAnimationFrame(tick);
@@ -64,12 +94,18 @@ export function createLoop(options: LoopOptions): Loop {
     // against, so it advances the clock by nothing at all.
     const delta = lastTimestamp === null ? 0 : clampDelta(timestamp - lastTimestamp, maxDeltaMs);
     lastTimestamp = timestamp;
-    options.onFrame(delta);
+    // Whole milliseconds only — see `splitWholeMs`. The fraction is carried,
+    // not lost, so the game keeps real time while the run clock stays a number
+    // a replay can be written down in.
+    const split = splitWholeMs(delta, carryMs);
+    carryMs = split.carryMs;
+    options.onFrame(split.wholeMs);
   }
 
   function schedule(): void {
     if (frameHandle === null) {
       lastTimestamp = null;
+      carryMs = 0;
       frameHandle = requestAnimationFrame(tick);
     }
   }

@@ -131,6 +131,35 @@ export const MECHANIC_NOTES: readonly HelpRow[] = [
   },
 ];
 
+/**
+ * Watching a run back, and handing one to somebody.
+ *
+ * The keys named here are the game's own bindings doing a second job while a
+ * replay is on the well, so they are read out of `KEY_BINDINGS` rather than
+ * retyped — rebind "pause" and this panel follows.
+ */
+export function replayRows(): readonly HelpRow[] {
+  const keys = (action: string): string => {
+    const binding = KEY_BINDINGS.find((candidate) => candidate.action === action);
+    return binding === undefined ? '' : describeBinding(binding);
+  };
+  return [
+    {
+      term: 'Watch replay',
+      detail: 'Plays your last run back in the well, exactly as it happened.',
+    },
+    { term: keys('hardDrop'), detail: 'Play or pause the replay' },
+    { term: '1× / 2× / 4×', detail: 'How fast it plays back' },
+    { term: keys('restart'), detail: 'Watch it again from the first piece' },
+    { term: keys('togglePause'), detail: 'Leave the replay' },
+    {
+      term: 'Copy replay link',
+      detail:
+        'Puts the run in a link a friend can watch. Nothing is uploaded. A run too long to fit says so.',
+    },
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Markup
 // ---------------------------------------------------------------------------
@@ -186,5 +215,6 @@ export function helpBodyMarkup(): string {
     ${section('help-touch', 'Touch', TOUCH_GESTURES, 'help__term')}
     ${section('help-scoring', 'Scoring', scoringRows(), 'help__term')}
     ${section('help-mechanics', 'Hold, ghost and spins', MECHANIC_NOTES, 'help__term')}
+    ${section('help-replays', 'Replays and sharing', replayRows(), 'help__term')}
   `;
 }
