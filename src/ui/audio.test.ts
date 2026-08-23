@@ -11,6 +11,8 @@ const CUES: readonly SoundCue[] = [
   'clear',
   'spin',
   'levelUp',
+  'tick',
+  'finish',
   'gameOver',
 ];
 
@@ -97,10 +99,13 @@ describe('cueDurationMs', () => {
     for (const cue of ['move', 'rotate', 'softDrop'] as const) {
       expect(cueDurationMs(cue)).toBeLessThan(60);
     }
+    // The countdown tick fires once a second for ten of them. Anything longer
+    // than a blip and the last ten seconds of an Ultra become a siren.
+    expect(cueDurationMs('tick')).toBeLessThan(60);
   });
 
   it('lets the celebrations ring, but not for a whole piece drop', () => {
-    for (const cue of ['clear', 'levelUp', 'gameOver'] as const) {
+    for (const cue of ['clear', 'levelUp', 'finish', 'gameOver'] as const) {
       expect(cueDurationMs(cue, 4)).toBeGreaterThan(150);
       expect(cueDurationMs(cue, 4)).toBeLessThan(1000);
     }

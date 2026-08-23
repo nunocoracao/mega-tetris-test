@@ -66,6 +66,12 @@ export const LINE_CLEAR_DELAY_MS = 250;
 /** Cleared lines needed per level. */
 export const LINES_PER_LEVEL = 10;
 
+/** How many lines a Sprint has to clear before the clock stops. */
+export const SPRINT_GOAL_LINES = 40;
+
+/** How long an Ultra run lasts. Two minutes, to the millisecond. */
+export const ULTRA_TIME_LIMIT_MS = 120_000;
+
 /** Base score per line clear, before the level multiplier. */
 export const LINE_CLEAR_POINTS: Readonly<Record<number, number>> = {
   1: 100,
@@ -168,9 +174,69 @@ export function levelForLines(startLevel: number, lines: number): number {
  * `ready`   — a piece is on the field but the clock has not started.
  * `playing` — time and input both flow.
  * `paused`  — gravity is frozen and gameplay input is ignored.
- * `over`    — the spawn area was blocked; only `restart` does anything.
+ * `over`    — the run is finished; only `restart` does anything. *Why* it
+ *             finished is `GameState.outcome`, which the UI needs and must not
+ *             have to infer.
  */
 export type GameStatus = 'ready' | 'playing' | 'paused' | 'over';
+
+/**
+ * The three ways to play. Same rules, same level curve, different finish line.
+ *
+ * `marathon` — endless. The run ends when the well tops out, and that is the
+ *              whole of it. This is the default and the shape the game had
+ *              before there was a choice.
+ * `sprint`   — clear `SPRINT_GOAL_LINES` as fast as possible. The result is a
+ *              time; a top-out before the goal is a did-not-finish.
+ * `ultra`    — score as much as possible in `ULTRA_TIME_LIMIT_MS`. The result
+ *              is a score; a top-out ends the run early with whatever it had.
+ *
+ * Gravity, scoring and levels are deliberately identical across all three: a
+ * mode is a finish line drawn on the same game, not a different game.
+ */
+export type GameMode = 'marathon' | 'sprint' | 'ultra';
+
+/** Every mode, in the order the start screen offers them. */
+export const GAME_MODES: readonly GameMode[] = ['marathon', 'sprint', 'ultra'];
+
+/**
+ * What a mode asks of a run. Zero means "no such limit", which is what makes
+ * Marathon the mode with nothing to say: both of its goals are off.
+ */
+export interface ModeRules {
+  /** Lines that end the run when reached. 0 for no line goal. */
+  readonly goalLines: number;
+  /** Milliseconds of play that end the run. 0 for no clock. */
+  readonly timeLimitMs: number;
+}
+
+export const MODE_RULES: Readonly<Record<GameMode, ModeRules>> = {
+  marathon: { goalLines: 0, timeLimitMs: 0 },
+  sprint: { goalLines: SPRINT_GOAL_LINES, timeLimitMs: 0 },
+  ultra: { goalLines: 0, timeLimitMs: ULTRA_TIME_LIMIT_MS },
+};
+
+/** Anything at all, read as a mode. Unrecognised values are Marathon. */
+export function parseGameMode(value: unknown): GameMode {
+  return GAME_MODES.includes(value as GameMode) ? (value as GameMode) : 'marathon';
+}
+
+/**
+ * How a run finished, or `none` while it is still going.
+ *
+ * This is a fact the UI needs and cannot reliably reconstruct: "40 lines and
+ * the game is over" could be a finished Sprint or a Marathon that topped out on
+ * its fortieth line, and the two deserve completely different sentences — and,
+ * in Sprint's case, completely different treatment by the record book.
+ *
+ * `toppedOut`    — a piece had nowhere to spawn. In Sprint this is a DNF.
+ * `goalReached`  — the mode's line goal was met. Sprint only.
+ * `timeUp`       — the mode's clock ran out. Ultra only.
+ */
+export type RunOutcome = 'none' | 'toppedOut' | 'goalReached' | 'timeUp';
+
+/** A finished run's outcome: everything but `none`. */
+export type FinishedOutcome = Exclude<RunOutcome, 'none'>;
 
 /**
  * The last thing that successfully happened to the falling piece.
@@ -256,12 +322,20 @@ export type GameEvent =
   | { readonly type: 'levelUp'; readonly level: number; readonly previousLevel: number }
   /** The player swapped pieces: `held` went into the slot, `active` came out. */
   | { readonly type: 'hold'; readonly held: PieceKind; readonly active: PieceKind }
-  /** The run ended, with its final numbers. */
+  /**
+   * The run ended, with everything any mode needs to describe it: which mode it
+   * was, *how* it ended, and the four numbers. `durationMs` is the run's clock
+   * at the moment it stopped, which is Sprint's whole result and the only one
+   * of the four that the snapshot's `score`/`lines`/`level` do not cover.
+   */
   | {
-      readonly type: 'gameOver';
+      readonly type: 'runEnd';
+      readonly mode: GameMode;
+      readonly outcome: FinishedOutcome;
       readonly score: number;
       readonly lines: number;
       readonly level: number;
+      readonly durationMs: number;
     };
 
 /** Every player action the engine understands. */
@@ -327,7 +401,11 @@ export interface GameState {
   /** How many difficult clears the current back-to-back chain is up to; 0 when
    *  there is no chain. */
   readonly backToBackChain: number;
-  /** Total time advanced while playing. Useful for a UI clock. */
+  /**
+   * Total time advanced while playing. The UI clock, and — in Ultra — the
+   * thing the deadline is measured against, which is why `update` consumes
+   * time in slices that stop *on* the limit rather than stepping over it.
+   */
   readonly elapsedMs: number;
   /** What happened during the call that produced this snapshot. */
   readonly events: readonly GameEvent[];
@@ -335,11 +413,22 @@ export interface GameState {
   readonly seed: number;
   /** The level this run started on. */
   readonly startLevel: number;
+  /** Which mode is being played. `restart` keeps it; changing it is a
+   *  `createGame` call. */
+  readonly mode: GameMode;
+  /** Lines that end the run when reached, or 0 when the mode has no goal. */
+  readonly goalLines: number;
+  /** Milliseconds that end the run when reached, or 0 when there is no clock. */
+  readonly timeLimitMs: number;
+  /** How the run finished, or `none` while it is still going. */
+  readonly outcome: RunOutcome;
 }
 
 export interface GameOptions {
   readonly seed?: number;
   readonly startLevel?: number;
+  /** Which mode to play. Defaults to `marathon`. */
+  readonly mode?: GameMode;
 }
 
 const NO_EVENTS: readonly GameEvent[] = Object.freeze([]);
@@ -417,15 +506,42 @@ function spawnedPiece(kind: PieceKind, board: Board): ActivePiece {
   return { kind, rotation: 0, x: at.x, y: at.y };
 }
 
-/** End the run, recording the final numbers for the UI. */
-function endGame(state: GameState, events: GameEvent[]): GameState {
+/**
+ * End the run, recording *how* it ended and the numbers it ended on.
+ *
+ * The one exit from a live game, whichever mode is being played and whichever
+ * of the three things stopped it — so there is exactly one place that decides
+ * what a finished snapshot looks like, and exactly one event to listen for.
+ */
+function endRun(state: GameState, outcome: FinishedOutcome, events: GameEvent[]): GameState {
   events.push({
-    type: 'gameOver',
+    type: 'runEnd',
+    mode: state.mode,
+    outcome,
     score: state.score,
     lines: state.lines,
     level: state.level,
+    durationMs: state.elapsedMs,
   });
-  return { ...state, active: null, status: 'over', clearDelayMs: 0, lockMs: 0, gravityMs: 0 };
+  return {
+    ...state,
+    active: null,
+    status: 'over',
+    outcome,
+    clearDelayMs: 0,
+    lockMs: 0,
+    gravityMs: 0,
+  };
+}
+
+/** Has this mode's line goal been met? False for a mode that has no goal. */
+function goalReached(state: GameState): boolean {
+  return state.goalLines > 0 && state.lines >= state.goalLines;
+}
+
+/** Has this mode's clock run out? False for a mode that has no clock. */
+function timeExpired(state: GameState): boolean {
+  return state.timeLimitMs > 0 && state.elapsedMs >= state.timeLimitMs;
 }
 
 /**
@@ -452,7 +568,7 @@ function spawnNext(state: GameState, events: GameEvent[]): GameState {
 
   const piece = spawnedPiece(kind, queued.board);
   if (!isValidPosition(queued.board, piece)) {
-    return endGame(queued, events);
+    return endRun(queued, 'toppedOut', events);
   }
 
   events.push({ type: 'spawn', kind });
@@ -554,6 +670,13 @@ function lockActive(state: GameState, events: GameEvent[]): GameState {
     clearDelayMs,
   };
 
+  // The finish line is checked *here*, on the clear that crossed it, rather
+  // than on the next frame: a Sprint ends on the run's fortieth line, and the
+  // clock it is judged by is the clock as it stood at that moment.
+  if (goalReached(locked)) {
+    return endRun(locked, 'goalReached', events);
+  }
+
   return clearDelayMs > 0 ? locked : spawnNext(locked, events);
 }
 
@@ -584,6 +707,8 @@ function refreshLock(state: GameState): GameState {
 export function createGame(options: GameOptions = {}): GameState {
   const seed = options.seed ?? DEFAULT_SEED;
   const startLevel = Math.max(1, Math.floor(options.startLevel ?? 1));
+  const mode = parseGameMode(options.mode ?? 'marathon');
+  const rules = MODE_RULES[mode];
   const opening = drawPieces(createBagState(seed), NEXT_QUEUE_SIZE);
 
   const empty: GameState = {
@@ -609,6 +734,10 @@ export function createGame(options: GameOptions = {}): GameState {
     events: NO_EVENTS,
     seed,
     startLevel,
+    mode,
+    goalLines: rules.goalLines,
+    timeLimitMs: rules.timeLimitMs,
+    outcome: 'none',
   };
 
   // Creating a game is not an update, so it reports no events.
@@ -619,9 +748,12 @@ export function createGame(options: GameOptions = {}): GameState {
  * Advance the clock by `deltaMs`.
  *
  * Time is consumed in slices that stop at the next deadline — the next gravity
- * step, the end of the lock delay, the end of a line-clear pause — so a single
- * large delta produces exactly the same sequence of events as the many small
- * frames it stands in for.
+ * step, the end of the lock delay, the end of a line-clear pause, and in a
+ * timed mode the end of the run itself — so a single large delta produces
+ * exactly the same sequence of events as the many small frames it stands in
+ * for. That last deadline is why a 100 ms frame ends an Ultra run at exactly
+ * 120000 ms and not at 120100: the slice stops on the limit, the run ends
+ * there, and the 100 ms that would have overrun it is simply never spent.
  */
 export function update(state: GameState, deltaMs: number): GameState {
   if (state.status !== 'playing' || !(deltaMs > 0)) {
@@ -639,18 +771,28 @@ export function update(state: GameState, deltaMs: number): GameState {
     }
     steps += 1;
 
+    if (timeExpired(current)) {
+      current = endRun(current, 'timeUp', events);
+      break;
+    }
+
+    // How much of `remaining` the mode's clock will even allow. Infinite in a
+    // mode without one, which is what keeps Marathon's arithmetic untouched.
+    const untilDeadline =
+      current.timeLimitMs > 0 ? current.timeLimitMs - current.elapsedMs : Number.POSITIVE_INFINITY;
+
     const piece = current.active;
 
     if (piece === null) {
       // Between pieces: run down the line-clear pause, then spawn.
-      const consumed = Math.min(remaining, Math.max(0, current.clearDelayMs));
+      const consumed = Math.min(remaining, Math.max(0, current.clearDelayMs), untilDeadline);
       remaining -= consumed;
       current = {
         ...current,
         clearDelayMs: current.clearDelayMs - consumed,
         elapsedMs: current.elapsedMs + consumed,
       };
-      if (current.clearDelayMs <= 0) {
+      if (current.clearDelayMs <= 0 && !timeExpired(current)) {
         current = spawnNext(current, events);
       }
       continue;
@@ -659,7 +801,11 @@ export function update(state: GameState, deltaMs: number): GameState {
     if (!isResting(current.board, piece)) {
       // Falling: accumulate toward the next gravity step.
       const interval = gravityIntervalMs(current.level);
-      const consumed = Math.min(remaining, Math.max(0, interval - current.gravityMs));
+      const consumed = Math.min(
+        remaining,
+        Math.max(0, interval - current.gravityMs),
+        untilDeadline,
+      );
       remaining -= consumed;
       const gravityMs = current.gravityMs + consumed;
       current = { ...current, gravityMs, elapsedMs: current.elapsedMs + consumed };
@@ -678,13 +824,19 @@ export function update(state: GameState, deltaMs: number): GameState {
     }
 
     // Resting: run down the lock delay, then commit the piece.
-    const consumed = Math.min(remaining, Math.max(0, LOCK_DELAY_MS - current.lockMs));
+    const consumed = Math.min(remaining, Math.max(0, LOCK_DELAY_MS - current.lockMs), untilDeadline);
     remaining -= consumed;
     const lockMs = current.lockMs + consumed;
     current = { ...current, lockMs, elapsedMs: current.elapsedMs + consumed };
     if (lockMs >= LOCK_DELAY_MS) {
       current = lockActive(current, events);
     }
+  }
+
+  // The delta may have landed exactly on the deadline with nothing left to
+  // spend, in which case the loop exited without noticing. It has still run out.
+  if (current.status === 'playing' && timeExpired(current)) {
+    current = endRun(current, 'timeUp', events);
   }
 
   return withEvents(current, events);
@@ -814,7 +966,7 @@ function hold(state: GameState): GameState {
   };
 
   if (!isValidPosition(held.board, fresh)) {
-    return withEvents(endGame(held, events), events);
+    return withEvents(endRun(held, 'toppedOut', events), events);
   }
   return withEvents({ ...held, active: fresh }, events);
 }
@@ -829,9 +981,13 @@ function hold(state: GameState): GameState {
 export function applyInput(state: GameState, input: GameInput): GameState {
   switch (input.type) {
     case 'restart':
-      // Same seed, same starting level — a rerun, not a different game. A UI
-      // that wants a different sequence calls `createGame` with a new seed.
-      return { ...createGame({ seed: state.seed, startLevel: state.startLevel }), status: 'playing' };
+      // Same seed, same starting level, same mode — a rerun, not a different
+      // game. A UI that wants a different sequence, or a different mode, calls
+      // `createGame`.
+      return {
+        ...createGame({ seed: state.seed, startLevel: state.startLevel, mode: state.mode }),
+        status: 'playing',
+      };
 
     case 'pause':
       return state.status === 'playing'

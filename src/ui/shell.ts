@@ -22,8 +22,16 @@
  * references to it.
  */
 
+import { GAME_MODES } from '../engine';
 import { helpBodyMarkup } from './help';
-import { MENU_STATS, OVERLAY_ROW_KEYS, OVERLAY_ROW_LABELS } from './hud';
+import {
+  MENU_STATS,
+  MODE_BLURBS,
+  MODE_LABELS,
+  OVERLAY_ROW_KEYS,
+  OVERLAY_ROW_LABELS,
+  READOUT_ROW_KEYS,
+} from './hud';
 import { KEY_BINDINGS, describeBinding } from './input';
 import { START_LEVELS } from './stats';
 import { TOUCH_PAD_BUTTONS } from './touch';
@@ -40,13 +48,12 @@ export interface Shell {
   readonly nextText: HTMLElement;
   /** What the hold slot is holding, likewise. */
   readonly holdText: HTMLElement;
+  /** The readout panel's heading: "Score", "Time", "Time left". */
+  readonly readoutTitle: HTMLElement;
+  /** The big number under it, whatever the mode has made that. */
   readonly score: HTMLElement;
-  /** The personal best, beside the running score. */
-  readonly best: HTMLElement;
-  /** The row it lives in, which lights up while this run is past it. */
-  readonly bestRow: HTMLElement;
-  readonly level: HTMLElement;
-  readonly lines: HTMLElement;
+  /** The three labelled rows beneath. `ui/hud.ts` writes both halves of each. */
+  readonly readoutRows: HTMLElement;
   readonly overlay: HTMLElement;
   /** The small line above the title: the game's name, or a record broken. */
   readonly overlayEyebrow: HTMLElement;
@@ -56,9 +63,11 @@ export interface Shell {
   readonly overlayRows: HTMLElement;
   /** A footnote under the panel: the personal best, or which ladder applied. */
   readonly overlayNote: HTMLElement;
-  /** The start screen's level picker and its label. */
+  /** The start screen's mode and level pickers. */
   readonly overlayStart: HTMLElement;
   readonly startLevel: HTMLSelectElement;
+  /** The three mode buttons, in the order the engine lists them. */
+  readonly modeButtons: readonly HTMLButtonElement[];
   /** Opens the help panel from the start screen. */
   readonly overlayHelp: HTMLButtonElement;
   readonly overlayButton: HTMLButtonElement;
@@ -192,6 +201,46 @@ function levelOptionsMarkup(): string {
 }
 
 /**
+ * The readout beside the well: a heading, a big number, three labelled rows.
+ *
+ * Every one of the seven strings in it is written by `ui/hud.ts` from the
+ * mode's own readout, so this is only the furniture — three rows with no
+ * meaning of their own, which is exactly what stops there being three HUDs.
+ */
+function readoutRowsMarkup(): string {
+  return READOUT_ROW_KEYS.map(
+    (key) =>
+      `<div class="stats__row" data-readout-row="${key}">
+         <dt class="stats__label" data-readout-label="${key}"></dt>
+         <dd class="stats__value" data-readout-value="${key}">—</dd>
+       </div>`,
+  ).join('');
+}
+
+/**
+ * The mode picker.
+ *
+ * Three real buttons in a labelled group, each carrying `aria-pressed` — so the
+ * current choice is announced rather than merely coloured in, `Tab` reaches all
+ * three, and Enter and Space work because they are buttons and nothing has been
+ * done to stop them. The blurb under each name is part of the button's own
+ * accessible name, which is what makes "Sprint, clear 40 lines as fast as you
+ * can" one thing to hear instead of two.
+ */
+function modesMarkup(): string {
+  return GAME_MODES.map(
+    (mode) =>
+      `<button
+         type="button"
+         class="mode"
+         data-mode="${mode}"
+         aria-pressed="false"
+       ><span class="mode__name">${MODE_LABELS[mode]}</span>
+        <span class="mode__blurb">${MODE_BLURBS[mode]}</span></button>`,
+  ).join('');
+}
+
+/**
  * The one panel that covers the well: attract screen, paused veil, scoreboard.
  *
  * All three states share this markup and `ui/hud.ts` decides which parts of it
@@ -210,6 +259,7 @@ function overlayMarkup(): string {
       <dl class="runstats" data-overlay-rows hidden>${runStatsMarkup()}</dl>
       <p class="overlay__note" data-overlay-note hidden></p>
       <div class="overlay__start" data-overlay-start hidden>
+        <div class="modes" role="group" aria-label="Game mode">${modesMarkup()}</div>
         <label class="level" for="start-level">
           <span class="level__label">Start level</span>
           <select class="level__select" id="start-level" data-start-level>
@@ -332,23 +382,10 @@ export function createShell(root: HTMLElement): Shell {
 
       <main class="game__body" aria-label="Mega Tetris playfield and readouts">
         <div class="rail rail--start">
-          <section class="panel panel--score">
-            <h2 class="panel__title">Score</h2>
+          <section class="panel panel--score" aria-labelledby="readout-title">
+            <h2 class="panel__title" id="readout-title" data-readout-title>Score</h2>
             <p class="score" data-score>0</p>
-            <dl class="stats">
-              <div class="stats__row" data-best-row>
-                <dt class="stats__label">Best</dt>
-                <dd class="stats__value" data-best>—</dd>
-              </div>
-              <div class="stats__row">
-                <dt class="stats__label">Level</dt>
-                <dd class="stats__value" data-level>1</dd>
-              </div>
-              <div class="stats__row">
-                <dt class="stats__label">Lines</dt>
-                <dd class="stats__value" data-lines>0</dd>
-              </div>
-            </dl>
+            <dl class="stats" data-readout-rows>${readoutRowsMarkup()}</dl>
           </section>
 
           <section class="panel panel--hold">
@@ -430,11 +467,9 @@ export function createShell(root: HTMLElement): Shell {
     boardSummary: must<HTMLElement>(root, '[data-board-summary]'),
     nextText: must<HTMLElement>(root, '[data-next-text]'),
     holdText: must<HTMLElement>(root, '[data-hold-text]'),
+    readoutTitle: must<HTMLElement>(root, '[data-readout-title]'),
     score: must<HTMLElement>(root, '[data-score]'),
-    best: must<HTMLElement>(root, '[data-best]'),
-    bestRow: must<HTMLElement>(root, '[data-best-row]'),
-    level: must<HTMLElement>(root, '[data-level]'),
-    lines: must<HTMLElement>(root, '[data-lines]'),
+    readoutRows: must<HTMLElement>(root, '[data-readout-rows]'),
     overlay: must<HTMLElement>(root, '[data-overlay]'),
     overlayEyebrow: must<HTMLElement>(root, '[data-overlay-eyebrow]'),
     overlayTitle: must<HTMLElement>(root, '[data-overlay-title]'),
@@ -443,6 +478,7 @@ export function createShell(root: HTMLElement): Shell {
     overlayNote: must<HTMLElement>(root, '[data-overlay-note]'),
     overlayStart: must<HTMLElement>(root, '[data-overlay-start]'),
     startLevel: must<HTMLSelectElement>(root, '[data-start-level]'),
+    modeButtons: GAME_MODES.map((mode) => must<HTMLButtonElement>(root, `[data-mode="${mode}"]`)),
     overlayHelp: must<HTMLButtonElement>(root, '[data-overlay-help]'),
     overlayButton: must<HTMLButtonElement>(root, '[data-overlay-button]'),
     countdown: must<HTMLElement>(root, '[data-countdown]'),

@@ -31,6 +31,7 @@
  * each of them the one setting it owns.
  */
 
+import { parseGameMode, type GameMode } from '../engine';
 import { parseContrastSetting, type ContrastSetting } from './contrast';
 import { parseMotionSetting, type MotionSetting } from './motion';
 import {
@@ -56,7 +57,7 @@ export const STORAGE_KEY = 'mega-tetris:store';
  * that gets the previous version here — a store written by an older build must
  * keep working, and a player's high score is not something to shrug about.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** Everything a player can set, as one object. */
 export interface Settings {
@@ -70,6 +71,8 @@ export interface Settings {
   readonly seenHelp: boolean;
   /** The level the next run begins on, from the start screen's picker. */
   readonly startLevel: number;
+  /** The mode the next run is played in, from the start screen's picker. */
+  readonly mode: GameMode;
 }
 
 export interface StoredData {
@@ -86,6 +89,9 @@ export function defaultSettings(): Settings {
     pad: 'auto',
     seenHelp: false,
     startLevel: 1,
+    // Marathon is the game as it has always been, so it is what a player who
+    // has never opened the picker gets.
+    mode: 'marathon',
   };
 }
 
@@ -128,6 +134,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     seenHelp: flag(source['seenHelp'], defaults.seenHelp),
     startLevel:
       typeof startLevel === 'number' ? clampStartLevel(startLevel) : defaults.startLevel,
+    mode: parseGameMode(source['mode']),
   };
 }
 
@@ -145,8 +152,25 @@ const MIGRATIONS: Readonly<
   Record<number, (data: Record<string, unknown>) => Record<string, unknown>>
 > = {
   // 1 → 2: personal bests arrived. Version 1 stored settings and nothing else,
-  // which is exactly what the loose-key era amounted to.
-  1: (data) => ({ ...data, stats: defaultStats() }),
+  // which is exactly what the loose-key era amounted to, so there is nothing to
+  // carry forward — the empty object the next step and the sanitiser see is the
+  // honest description of what a version-1 player had.
+  1: (data) => ({ ...data, stats: {} }),
+
+  // 2 → 3: game modes arrived, and with them a record book per mode. Version 2
+  // knew one game, so everything it stored is Marathon's — and it keeps every
+  // number, on the ladder it was set on.
+  2: (data) => {
+    const stats = isRecordObject(data['stats']) ? data['stats'] : {};
+    return {
+      ...data,
+      stats: {
+        modes: { marathon: { base: stats['best'], headStart: stats['headStart'] } },
+        gamesPlayed: stats['gamesPlayed'],
+        totalLines: stats['totalLines'],
+      },
+    };
+  },
 };
 
 /** The oldest version we know how to read. Anything older is treated as this. */

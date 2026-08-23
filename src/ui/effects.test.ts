@@ -458,7 +458,7 @@ describe('render', () => {
   it('sweeps the game-over grey up the field over time', () => {
     const { effects } = makeEffects();
 
-    effects.observe([{ type: 'gameOver', score: 10, lines: 1, level: 1 }], createBoard());
+    effects.observe([{ type: 'runEnd', mode: 'marathon', outcome: 'toppedOut', score: 10, lines: 1, level: 1, durationMs: 9_000 }], createBoard());
 
     const early = stubContext();
     effects.update(60, 10);
@@ -476,7 +476,7 @@ describe('render', () => {
   it('greys the whole field at once when motion is reduced', () => {
     const { effects } = makeEffects(true);
 
-    effects.observe([{ type: 'gameOver', score: 10, lines: 1, level: 1 }], createBoard());
+    effects.observe([{ type: 'runEnd', mode: 'marathon', outcome: 'toppedOut', score: 10, lines: 1, level: 1, durationMs: 9_000 }], createBoard());
     const ctx = stubContext();
     effects.update(16, 10);
     effects.render(ctx, fieldView());

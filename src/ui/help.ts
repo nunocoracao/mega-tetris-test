@@ -22,13 +22,14 @@
 import {
   BACK_TO_BACK_MULTIPLIER,
   COMBO_POINTS,
+  GAME_MODES,
   HARD_DROP_POINTS,
   KICKED_SPIN_POINTS,
   LINE_CLEAR_POINTS,
   SOFT_DROP_POINTS,
   SPIN_POINTS,
 } from '../engine';
-import { CLEAR_NAMES, CLEAR_SIZES } from './hud';
+import { CLEAR_NAMES, CLEAR_SIZES, MODE_BLURBS, MODE_LABELS } from './hud';
 import { KEY_BINDINGS, describeBinding } from './input';
 
 /** One line of the help: what you do on the left, what happens on the right. */
@@ -58,6 +59,16 @@ export const TOUCH_GESTURES: readonly HelpRow[] = [
   { term: 'Tap the left edge', detail: 'Rotate left' },
   { term: 'Swipe up', detail: 'Hold' },
 ];
+
+/**
+ * The three modes, generated from the engine's own list and the HUD's own copy
+ * — so a mode added to `GAME_MODES` appears here without anyone remembering to
+ * add it, and its blurb cannot say one thing on the start screen and another in
+ * the help panel.
+ */
+export function modeRows(): readonly HelpRow[] {
+  return GAME_MODES.map((mode) => ({ term: MODE_LABELS[mode], detail: MODE_BLURBS[mode] }));
+}
 
 /** `'single'` → `'Single'`. The names themselves live in `ui/hud.ts`. */
 function titleCase(word: string): string {
@@ -170,6 +181,7 @@ export function helpBodyMarkup(): string {
       Stack the falling pieces so they fill a whole row — full rows clear and
       score. The game speeds up every ten lines.
     </p>
+    ${section('help-modes', 'Modes', modeRows(), 'help__term')}
     ${section('help-keys', 'Keyboard', keyboardRows(), 'help__keys')}
     ${section('help-touch', 'Touch', TOUCH_GESTURES, 'help__term')}
     ${section('help-scoring', 'Scoring', scoringRows(), 'help__term')}

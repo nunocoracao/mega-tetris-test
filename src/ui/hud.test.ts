@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  SPRINT_GOAL_LINES,
+  ULTRA_TIME_LIMIT_MS,
   applyInput,
   boardFromStrings,
   createGame,
   type GameEvent,
+  type GameMode,
   type GameState,
 } from '../engine';
 import {
@@ -20,11 +23,18 @@ import {
   describePlayfield,
   describeQueue,
   describeRunEnd,
+  MODE_LABELS,
+  SPRINT_WARNING_LINES,
+  ULTRA_WARNING_MS,
   formatDuration,
   formatNumber,
+  hudReadout,
   menuStatValues,
+  outcomeTitle,
   overlayContent,
+  overlayRowOrder,
   playButtonLabel,
+  runUrgency,
   spinName,
   stackHeight,
   summaryLine,
@@ -113,7 +123,17 @@ describe('describeEvent', () => {
       ),
     ).toBe('4 lines cleared, back to back, 1,600 points.');
     expect(describeEvent({ type: 'levelUp', level: 3, previousLevel: 2 })).toBe('Level 3.');
-    expect(describeEvent({ type: 'gameOver', score: 4200, lines: 21, level: 3 })).toContain('4,200');
+    expect(
+      describeEvent({
+        type: 'runEnd',
+        mode: 'marathon',
+        outcome: 'toppedOut',
+        score: 4200,
+        lines: 21,
+        level: 3,
+        durationMs: 161_000,
+      }),
+    ).toContain('4,200');
   });
 
   it('stays quiet about the constant background chatter', () => {
@@ -204,7 +224,58 @@ describe('describePlayfield', () => {
 // ---------------------------------------------------------------------------
 
 function run(overrides: Partial<RunSummary> = {}): RunSummary {
-  return { score: 4200, lines: 12, level: 3, startLevel: 1, durationMs: 161_000, ...overrides };
+  return {
+    mode: 'marathon',
+    outcome: 'toppedOut',
+    score: 4200,
+    lines: 12,
+    level: 3,
+    startLevel: 1,
+    durationMs: 161_000,
+    ...overrides,
+  };
+}
+
+/** A finished Sprint: forty lines, in `durationMs`. */
+function sprintRun(overrides: Partial<RunSummary> = {}): RunSummary {
+  return run({
+    mode: 'sprint',
+    outcome: 'goalReached',
+    lines: SPRINT_GOAL_LINES,
+    durationMs: 102_000,
+    score: 6_400,
+    level: 5,
+    ...overrides,
+  });
+}
+
+/** An Ultra that ran its clock out. */
+function ultraRun(overrides: Partial<RunSummary> = {}): RunSummary {
+  return run({
+    mode: 'ultra',
+    outcome: 'timeUp',
+    score: 8_400,
+    durationMs: ULTRA_TIME_LIMIT_MS,
+    ...overrides,
+  });
+}
+
+/** A `ready` snapshot in `mode`, for the start screen's copy. */
+function readyIn(mode: GameMode): GameState {
+  return createGame({ seed: 7, mode });
+}
+
+/** An `over` snapshot carrying the outcome the engine would have set. */
+function endedAs(run: RunSummary): GameState {
+  return {
+    ...createGame({ seed: 7, mode: run.mode }),
+    status: 'over',
+    outcome: run.outcome,
+    score: run.score,
+    lines: run.lines,
+    level: run.level,
+    elapsedMs: run.durationMs,
+  };
 }
 
 describe('formatDuration', () => {
@@ -235,7 +306,9 @@ describe('bestLine', () => {
   it('says all three numbers of a personal best', () => {
     const stats = applyRun(defaultStats(), run()).stats;
 
-    expect(bestLine(stats.best)).toBe('4,200 points, level 3, 12 lines');
+    expect(bestLine(stats.modes.marathon.base, 'marathon')).toBe(
+      '4,200 points, level 3, 12 lines',
+    );
   });
 });
 
@@ -457,5 +530,253 @@ describe('what the live region hears about the new scoring', () => {
         }),
       ),
     ).toBe('L-spin, 2 lines cleared, back to back, combo ×10, 1,400 points.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Modes
+// ---------------------------------------------------------------------------
+
+describe('the readout beside the well', () => {
+  it('leads Marathon with the score it is played for', () => {
+    const state: GameState = { ...playing, score: 4200, level: 3, lines: 24 };
+    const readout = hudReadout(state);
+
+    expect(readout.title).toBe('Score');
+    expect(readout.value).toBe('4,200');
+    expect(readout.rows.map((row) => row.label)).toEqual(['Best', 'Level', 'Lines']);
+    expect(readout.rows.map((row) => row.value)).toEqual(['—', '3', '24']);
+  });
+
+  it('lights the score while the count-up is still climbing', () => {
+    const state: GameState = { ...playing, score: 4200 };
+
+    expect(hudReadout(state, { score: 3000 }).counting).toBe(true);
+    expect(hudReadout(state, { score: 4200 }).counting).toBe(false);
+  });
+
+  it('leads Sprint with a clock counting up, and the lines still to go', () => {
+    const state: GameState = {
+      ...applyInput(createGame({ seed: 7, mode: 'sprint' }), { type: 'resume' }),
+      lines: 36,
+      level: 4,
+      elapsedMs: 102_000,
+    };
+    const readout = hudReadout(state);
+
+    expect(readout.title).toBe('Time');
+    expect(readout.value).toBe('1:42');
+    expect(readout.rows.map((row) => row.label)).toEqual(['Best', 'Level', 'To go']);
+    expect(readout.rows[2]?.value).toBe('4');
+  });
+
+  it('leads Ultra with a clock counting down, and keeps the score beside it', () => {
+    const state: GameState = {
+      ...applyInput(createGame({ seed: 7, mode: 'ultra' }), { type: 'resume' }),
+      score: 8_400,
+      elapsedMs: 90_000,
+    };
+    const readout = hudReadout(state);
+
+    expect(readout.title).toBe('Time left');
+    expect(readout.value).toBe('0:30');
+    expect(readout.rows.map((row) => row.label)).toEqual(['Best', 'Level', 'Score']);
+    expect(readout.rows[2]?.value).toBe('8,400');
+  });
+
+  it('quotes the best on the mode’s own ladder, in the mode’s own units', () => {
+    const stats = applyRun(defaultStats(), sprintRun({ durationMs: 91_500 })).stats;
+
+    expect(hudReadout(readyIn('sprint'), { stats }).rows[0]?.value).toBe('1:31');
+    // A Marathon best is a score, and the Sprint one must not leak into it.
+    expect(hudReadout(readyIn('marathon'), { stats }).rows[0]?.value).toBe('—');
+  });
+});
+
+describe('the last few seconds, and the last few lines', () => {
+  function ultraAt(elapsedMs: number): GameState {
+    return { ...applyInput(createGame({ seed: 7, mode: 'ultra' }), { type: 'resume' }), elapsedMs };
+  }
+
+  function sprintAt(lines: number): GameState {
+    return { ...applyInput(createGame({ seed: 7, mode: 'sprint' }), { type: 'resume' }), lines };
+  }
+
+  it('says nothing at all in Marathon, which has no finish line', () => {
+    expect(runUrgency(playing)).toEqual({ urgent: false, step: null });
+  });
+
+  it('starts warning at the last ten seconds of an Ultra, and counts them out', () => {
+    expect(runUrgency(ultraAt(ULTRA_TIME_LIMIT_MS - ULTRA_WARNING_MS - 1)).urgent).toBe(false);
+    expect(runUrgency(ultraAt(ULTRA_TIME_LIMIT_MS - ULTRA_WARNING_MS))).toEqual({
+      urgent: true,
+      step: 10,
+    });
+    expect(runUrgency(ultraAt(ULTRA_TIME_LIMIT_MS - 2_400)).step).toBe(3);
+    expect(runUrgency(ultraAt(ULTRA_TIME_LIMIT_MS)).step).toBe(0);
+  });
+
+  it('starts warning at the last few lines of a Sprint, and counts them down', () => {
+    const start = SPRINT_GOAL_LINES - SPRINT_WARNING_LINES;
+    expect(runUrgency(sprintAt(start - 1)).urgent).toBe(false);
+    expect(runUrgency(sprintAt(start))).toEqual({ urgent: true, step: SPRINT_WARNING_LINES });
+    expect(runUrgency(sprintAt(SPRINT_GOAL_LINES - 1)).step).toBe(1);
+  });
+
+  it('goes quiet the moment the run is not live', () => {
+    const done: GameState = { ...ultraAt(ULTRA_TIME_LIMIT_MS - 1_000), status: 'over' };
+
+    expect(runUrgency(done).urgent).toBe(false);
+    expect(hudReadout(done).urgent).toBe(false);
+  });
+});
+
+describe('the run-summary panel', () => {
+  it('says what actually happened, not merely that it stopped', () => {
+    expect(outcomeTitle(run())).toBe('Game over');
+    expect(outcomeTitle(sprintRun())).toBe('40 lines in 1:42');
+    expect(outcomeTitle(sprintRun({ outcome: 'toppedOut', lines: 23, level: 6 }))).toBe(
+      'Topped out on level 6',
+    );
+    expect(outcomeTitle(ultraRun())).toBe('Time up — 8,400');
+    expect(outcomeTitle(ultraRun({ outcome: 'toppedOut', level: 6 }))).toBe(
+      'Topped out on level 6',
+    );
+  });
+
+  it('does not pretend a Sprint that fell over has a time', () => {
+    const dnf = sprintRun({ outcome: 'toppedOut', lines: 23 });
+    const result = applyRun(defaultStats(), dnf);
+    const content = overlayContent(endedAs(dnf), { result });
+
+    expect(content?.hint).toBe('23 of 40 lines — no time recorded');
+    expect(content?.eyebrow).toBeNull();
+    expect(content?.rows.some((row) => row.record)).toBe(false);
+  });
+
+  it('celebrates a best time in the words a Sprint deserves', () => {
+    const finish = sprintRun({ durationMs: 91_500 });
+    const result = applyRun(defaultStats(), finish);
+    const content = overlayContent(endedAs(finish), { result });
+
+    expect(content?.eyebrow).toBe('New best time!');
+    expect(content?.title).toBe('40 lines in 1:31');
+    expect(content?.hint).toBe('Level 5, 6,400 points');
+    expect(content?.rows.filter((row) => row.record).map((row) => row.key)).toEqual(['time']);
+  });
+
+  it('reads the row a mode is raced on first', () => {
+    expect(overlayRowOrder('marathon')).toEqual(['score', 'lines', 'level', 'time']);
+    expect(overlayRowOrder('ultra')).toEqual(['score', 'lines', 'level', 'time']);
+    expect(overlayRowOrder('sprint')).toEqual(['time', 'lines', 'level', 'score']);
+
+    const finish = sprintRun();
+    const rows = overlayContent(endedAs(finish), { result: applyRun(defaultStats(), finish) })
+      ?.rows;
+    expect(rows?.map((row) => row.key)).toEqual(['time', 'lines', 'level', 'score']);
+  });
+
+  it('still shouts about a high score in the modes that have one', () => {
+    const finish = ultraRun();
+    const content = overlayContent(endedAs(finish), {
+      result: applyRun(defaultStats(), finish),
+    });
+
+    expect(content?.eyebrow).toBe('New high score!');
+    expect(content?.title).toBe('Time up — 8,400');
+  });
+
+  it('names the mode when a run was measured on the head-start ladder', () => {
+    const finish = sprintRun({ startLevel: 7 });
+    const content = overlayContent(endedAs(finish), {
+      result: applyRun(defaultStats(), finish),
+    });
+
+    expect(content?.note).toContain('level 7');
+    expect(content?.note).toContain(MODE_LABELS.sprint);
+  });
+});
+
+describe('the start screen, per mode', () => {
+  it('quotes the best for the mode the picker is set to', () => {
+    const stats = applyRun(
+      applyRun(defaultStats(), run({ score: 9_000 })).stats,
+      sprintRun({ durationMs: 91_500 }),
+    ).stats;
+
+    expect(overlayContent(readyIn('marathon'), { stats })?.note).toBe(
+      'Your best Marathon: 9,000 points, level 3, 12 lines.',
+    );
+    expect(overlayContent(readyIn('sprint'), { stats })?.note).toBe(
+      'Your best Sprint: 1:31 for 40 lines.',
+    );
+    // Nothing has been played in Ultra, so there is nothing to quote.
+    expect(overlayContent(readyIn('ultra'), { stats })?.note).toBeNull();
+  });
+
+  it('does not count an unfinished Sprint as a best', () => {
+    const stats = applyRun(
+      defaultStats(),
+      sprintRun({ outcome: 'toppedOut', lines: 23, durationMs: 30_000 }),
+    ).stats;
+
+    expect(overlayContent(readyIn('sprint'), { stats })?.note).toBeNull();
+  });
+});
+
+describe('what the live region hears about a finished run', () => {
+  it('does not call a completed Sprint a game over', () => {
+    const update = applyRun(defaultStats(), sprintRun({ durationMs: 91_500 }));
+
+    expect(describeRunEnd(update)).toBe(
+      'Sprint complete. 40 lines in 1:31, 6,400 points. A new best time!',
+    );
+  });
+
+  it('names the time to beat when a Sprint did not beat it', () => {
+    const first = applyRun(defaultStats(), sprintRun({ durationMs: 91_500 })).stats;
+    const update = applyRun(first, sprintRun({ durationMs: 120_000 }));
+
+    expect(describeRunEnd(update)).toContain('Your best is 1:31.');
+  });
+
+  it('says the clock ran out rather than that the player lost', () => {
+    const update = applyRun(defaultStats(), ultraRun());
+
+    expect(describeRunEnd(update)).toBe(
+      'Time up. Final score 8,400, 12 lines. A new high score!',
+    );
+  });
+
+  it('still says game over when a run really did top out', () => {
+    const update = applyRun(defaultStats(), sprintRun({ outcome: 'toppedOut', lines: 23 }));
+
+    expect(describeRunEnd(update)).toContain('Game over.');
+  });
+});
+
+describe('the playfield description, per mode', () => {
+  it('says how far a Sprint has to go', () => {
+    const state: GameState = {
+      ...applyInput(createGame({ seed: 7, mode: 'sprint' }), { type: 'resume' }),
+      lines: 36,
+      elapsedMs: 102_000,
+    };
+
+    expect(describePlayfield(state)).toContain('Sprint: 4 lines to go, 1:42 elapsed.');
+  });
+
+  it('says how long an Ultra has left', () => {
+    const state: GameState = {
+      ...applyInput(createGame({ seed: 7, mode: 'ultra' }), { type: 'resume' }),
+      elapsedMs: 90_000,
+    };
+
+    expect(describePlayfield(state)).toContain('Ultra: 0:30 left.');
+  });
+
+  it('leaves Marathon exactly as it was', () => {
+    expect(describePlayfield(playing)).not.toContain('Sprint');
+    expect(describePlayfield(playing)).not.toContain('Ultra');
   });
 });

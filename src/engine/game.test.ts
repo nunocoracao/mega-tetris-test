@@ -19,9 +19,14 @@ import {
   gravityIntervalMs,
   isResting,
   levelForLines,
+  parseGameMode,
   spinKind,
   spinTable,
   update,
+  GAME_MODES,
+  MODE_RULES,
+  SPRINT_GOAL_LINES,
+  ULTRA_TIME_LIMIT_MS,
   BACK_TO_BACK_MULTIPLIER,
   COMBO_POINTS,
   GRAVITY_BASE_MS,
@@ -38,6 +43,7 @@ import {
   SPIN_POINTS,
   type GameEvent,
   type GameInput,
+  type GameMode,
   type GameState,
 } from './game';
 import type { ActivePiece, PieceKind } from './types';
@@ -542,7 +548,8 @@ describe('hold', () => {
     const blocked: GameState = { ...playing(), board: blockedSpawnBoard() };
     const held = applyInput(blocked, { type: 'hold' });
     expect(held.status).toBe('over');
-    expect(eventsOfType(held, 'gameOver')).toHaveLength(1);
+    expect(eventsOfType(held, 'runEnd')).toHaveLength(1);
+    expect(held.outcome).toBe('toppedOut');
   });
 });
 
@@ -565,11 +572,15 @@ describe('game over', () => {
 
     expect(over.status).toBe('over');
     expect(over.active).toBeNull();
-    expect(eventsOfType(over, 'gameOver')[0]).toEqual({
-      type: 'gameOver',
+    expect(over.outcome).toBe('toppedOut');
+    expect(eventsOfType(over, 'runEnd')[0]).toEqual({
+      type: 'runEnd',
+      mode: 'marathon',
+      outcome: 'toppedOut',
       score: over.score,
       lines: over.lines,
       level: over.level,
+      durationMs: over.elapsedMs,
     });
     expect(eventsOfType(over, 'spawn')).toHaveLength(0);
   });
@@ -1015,7 +1026,7 @@ describe('a run that is played to the end', () => {
         break;
       }
       // Sit out the clear pause, if there was one — but never past the top-out,
-      // or the snapshot carrying the `gameOver` event is thrown away.
+      // or the snapshot carrying the `runEnd` event is thrown away.
       const settled = update(current, LINE_CLEAR_DELAY_MS + 1);
       if (settled.status !== 'playing') {
         return settled;
@@ -1029,12 +1040,15 @@ describe('a run that is played to the end', () => {
     const over = stackToTheTop(11);
     expect(over.status).toBe('over');
     expect(over.active).toBeNull();
-    const ended = eventsOfType(over, 'gameOver')[0];
+    const ended = eventsOfType(over, 'runEnd')[0];
     expect(ended).toEqual({
-      type: 'gameOver',
+      type: 'runEnd',
+      mode: 'marathon',
+      outcome: 'toppedOut',
       score: over.score,
       lines: over.lines,
       level: over.level,
+      durationMs: over.elapsedMs,
     });
   });
 
@@ -1543,4 +1557,227 @@ describe('the exact arithmetic', () => {
       expect(spinAndLock(state()).score).toBe(points);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Modes
+// ---------------------------------------------------------------------------
+
+/** A fresh, running game in `mode`. */
+function playingIn(mode: GameMode, options: { seed?: number; startLevel?: number } = {}): GameState {
+  return start(
+    createGame({ seed: options.seed ?? 7, startLevel: options.startLevel ?? 1, mode }),
+  );
+}
+
+/**
+ * A Sprint with `lines` already cleared and a vertical `I` resting in the gap,
+ * so one hard drop completes exactly `rows` more.
+ */
+function sprintPending(rows: number, lines: number): GameState {
+  return {
+    ...playingIn('sprint'),
+    board: boardWithFloor(rows),
+    active: { kind: 'I', rotation: 1, x: GAP_COLUMN - 2, y: BOARD_HEIGHT - 4 },
+    lines,
+  };
+}
+
+describe('modes', () => {
+  it('plays Marathon unless told otherwise, and Marathon has no finish line', () => {
+    const game = createGame({ seed: 7 });
+
+    expect(game.mode).toBe('marathon');
+    expect(game.goalLines).toBe(0);
+    expect(game.timeLimitMs).toBe(0);
+    expect(game.outcome).toBe('none');
+  });
+
+  it('takes each mode’s goals from one table', () => {
+    for (const mode of GAME_MODES) {
+      const game = createGame({ seed: 7, mode });
+      expect(game.mode).toBe(mode);
+      expect(game.goalLines).toBe(MODE_RULES[mode].goalLines);
+      expect(game.timeLimitMs).toBe(MODE_RULES[mode].timeLimitMs);
+    }
+    expect(MODE_RULES.sprint.goalLines).toBe(SPRINT_GOAL_LINES);
+    expect(MODE_RULES.ultra.timeLimitMs).toBe(ULTRA_TIME_LIMIT_MS);
+  });
+
+  it('reads an unrecognised mode as Marathon rather than throwing', () => {
+    expect(parseGameMode('sprint')).toBe('sprint');
+    expect(parseGameMode('blitz')).toBe('marathon');
+    expect(parseGameMode(undefined)).toBe('marathon');
+  });
+
+  it('keeps the mode across a restart — changing it is a new game', () => {
+    const again = applyInput(playingIn('ultra'), { type: 'restart' });
+
+    expect(again.mode).toBe('ultra');
+    expect(again.timeLimitMs).toBe(ULTRA_TIME_LIMIT_MS);
+    expect(again.status).toBe('playing');
+    expect(again.elapsedMs).toBe(0);
+  });
+
+  it('is the same game in all three: identical gravity, scoring and levels', () => {
+    // The only thing a mode changes is when the run stops, so up to the point
+    // where a finish line could bite, every snapshot must agree.
+    const script = 12_000;
+    const [marathon, sprint, ultra] = GAME_MODES.map((mode) =>
+      update(playingIn(mode, { seed: 21 }), script),
+    ) as [GameState, GameState, GameState];
+
+    for (const other of [sprint, ultra]) {
+      expect(other.board.cells).toEqual(marathon.board.cells);
+      expect(other.score).toBe(marathon.score);
+      expect(other.lines).toBe(marathon.lines);
+      expect(other.level).toBe(marathon.level);
+      expect(other.active).toEqual(marathon.active);
+      expect(other.status).toBe('playing');
+    }
+  });
+
+  it('gains levels the usual way in a timed mode', () => {
+    expect(levelForLines(1, 10)).toBe(2);
+    const climbing: GameState = { ...sprintPending(1, LINES_PER_LEVEL - 1) };
+    const cleared = applyInput(climbing, { type: 'hardDrop' });
+
+    expect(cleared.lines).toBe(LINES_PER_LEVEL);
+    expect(cleared.level).toBe(2);
+    expect(eventsOfType(cleared, 'levelUp')).toHaveLength(1);
+  });
+});
+
+/**
+ * An Ultra whose clock has already been wound forward.
+ *
+ * Two minutes of gravity with nobody playing tops the well out at about 106
+ * seconds, so a deadline test that started from zero would be testing the
+ * top-out instead. Winding the clock on is the honest way to reach the last few
+ * seconds of a run that is still going.
+ */
+function ultraAt(elapsedMs: number): GameState {
+  return { ...playingIn('ultra'), elapsedMs };
+}
+
+describe('an Ultra run against the clock', () => {
+  it('ends at exactly the limit, however long the frame that got there', () => {
+    // The whole point of slicing at the deadline: one enormous delta produces a
+    // run that stopped on 120000ms, not one that overshot and then noticed.
+    const done = update(ultraAt(ULTRA_TIME_LIMIT_MS - 5_000), 60_000);
+
+    expect(done.elapsedMs).toBe(ULTRA_TIME_LIMIT_MS);
+    expect(done.status).toBe('over');
+    expect(done.outcome).toBe('timeUp');
+  });
+
+  it('does not overshoot on a 100ms frame that straddles the deadline', () => {
+    const nearly = update(ultraAt(ULTRA_TIME_LIMIT_MS - 5_050), 5_000);
+    expect(nearly.status).toBe('playing');
+    expect(nearly.elapsedMs).toBe(ULTRA_TIME_LIMIT_MS - 50);
+
+    const done = update(nearly, 100);
+
+    expect(done.elapsedMs).toBe(ULTRA_TIME_LIMIT_MS);
+    expect(done.outcome).toBe('timeUp');
+  });
+
+  it('ends on a frame that lands exactly on the deadline with nothing to spare', () => {
+    const done = update(ultraAt(ULTRA_TIME_LIMIT_MS - 100), 100);
+
+    expect(done.elapsedMs).toBe(ULTRA_TIME_LIMIT_MS);
+    expect(done.outcome).toBe('timeUp');
+  });
+
+  it('reports the run with the numbers Ultra is scored on', () => {
+    const done = update(ultraAt(ULTRA_TIME_LIMIT_MS - 1_000), 5_000);
+    const ended = eventsOfType(done, 'runEnd')[0];
+
+    expect(ended).toEqual({
+      type: 'runEnd',
+      mode: 'ultra',
+      outcome: 'timeUp',
+      score: done.score,
+      lines: done.lines,
+      level: done.level,
+      durationMs: ULTRA_TIME_LIMIT_MS,
+    });
+  });
+
+  it('ends early, and says so, when the well tops out first', () => {
+    // Nobody is playing, so the stack reaches the ceiling well inside the two
+    // minutes — and that is a top-out, not a finished run.
+    const over = update(playingIn('ultra'), ULTRA_TIME_LIMIT_MS + 5_000);
+
+    expect(over.status).toBe('over');
+    expect(over.outcome).toBe('toppedOut');
+    expect(over.elapsedMs).toBeLessThan(ULTRA_TIME_LIMIT_MS);
+  });
+
+  it('leaves a mode without a clock running as long as you like', () => {
+    const marathon = update({ ...playing(), elapsedMs: ULTRA_TIME_LIMIT_MS }, 5_000);
+
+    expect(marathon.elapsedMs).toBe(ULTRA_TIME_LIMIT_MS + 5_000);
+    expect(marathon.status).toBe('playing');
+  });
+});
+
+describe('a Sprint run against the line goal', () => {
+  it('ends on the fortieth line', () => {
+    const done = applyInput(sprintPending(1, SPRINT_GOAL_LINES - 1), { type: 'hardDrop' });
+
+    expect(done.lines).toBe(SPRINT_GOAL_LINES);
+    expect(done.status).toBe('over');
+    expect(done.outcome).toBe('goalReached');
+    expect(done.active).toBeNull();
+  });
+
+  it('does not wait for the forty-first', () => {
+    const still = applyInput(sprintPending(1, SPRINT_GOAL_LINES - 2), { type: 'hardDrop' });
+
+    expect(still.lines).toBe(SPRINT_GOAL_LINES - 1);
+    expect(still.status).toBe('playing');
+    expect(still.outcome).toBe('none');
+    expect(eventsOfType(still, 'runEnd')).toHaveLength(0);
+  });
+
+  it('ends on the clear that crosses the line, not only on an exact landing', () => {
+    const done = applyInput(sprintPending(4, SPRINT_GOAL_LINES - 3), { type: 'hardDrop' });
+
+    expect(done.lines).toBe(SPRINT_GOAL_LINES + 1);
+    expect(done.outcome).toBe('goalReached');
+  });
+
+  it('stops the clock on the clear rather than after the clear pause', () => {
+    const at39 = update(sprintPending(1, SPRINT_GOAL_LINES - 1), 40);
+    const done = applyInput(at39, { type: 'hardDrop' });
+    const ended = eventsOfType(done, 'runEnd')[0];
+
+    expect(done.clearDelayMs).toBe(0);
+    expect(ended?.durationMs).toBe(done.elapsedMs);
+    expect(ended?.durationMs).toBe(40);
+  });
+
+  it('records a top-out before the goal as a top-out, not as a slow time', () => {
+    const doomed: GameState = {
+      ...playingIn('sprint'),
+      board: blockedSpawnBoard(),
+      active: { kind: 'T', rotation: 0, x: 3, y: BOARD_HEIGHT - 2 },
+      lines: 23,
+    };
+
+    const over = applyInput(doomed, { type: 'hardDrop' });
+
+    expect(over.status).toBe('over');
+    expect(over.outcome).toBe('toppedOut');
+    expect(over.lines).toBeLessThan(SPRINT_GOAL_LINES);
+    expect(eventsOfType(over, 'runEnd')[0]?.outcome).toBe('toppedOut');
+  });
+
+  it('has no clock of its own to run out', () => {
+    const long = update({ ...playingIn('sprint'), elapsedMs: ULTRA_TIME_LIMIT_MS }, 1_000);
+
+    expect(long.status).toBe('playing');
+    expect(long.elapsedMs).toBe(ULTRA_TIME_LIMIT_MS + 1_000);
+  });
 });

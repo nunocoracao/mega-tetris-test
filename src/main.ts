@@ -15,7 +15,15 @@
 
 import './style.css';
 
-import { applyInput, createGame, update, type GameInput, type GameState } from './engine';
+import {
+  GAME_MODES,
+  applyInput,
+  createGame,
+  update,
+  type GameInput,
+  type GameMode,
+  type GameState,
+} from './engine';
 import { createGameAudio } from './ui/audio';
 import { createContrastPreference, setHighContrast } from './ui/contrast';
 import { createCountdown } from './ui/countdown';
@@ -23,10 +31,13 @@ import { createModal } from './ui/dialog';
 import { createEffects } from './ui/effects';
 import {
   MENU_STATS,
+  MODE_BLURBS,
+  MODE_LABELS,
   createHud,
   describeEvent,
   describeRunEnd,
   menuStatValues,
+  runUrgency,
 } from './ui/hud';
 import { createKeyboardInput, normalizeKey, type ActionId } from './ui/input';
 import { createLoop } from './ui/loop';
@@ -117,10 +128,16 @@ const next = createPiecePanelRenderer(shell.nextCanvas, {
 });
 const hold = createPiecePanelRenderer(shell.holdCanvas, { slots: 1 });
 
-let state: GameState = createGame({
-  seed: newSeed(),
-  startLevel: store.get('startLevel'),
-});
+/** The options a fresh run is dealt with: a new sequence, the picker's answers. */
+function nextRunOptions(): { seed: number; startLevel: number; mode: GameMode } {
+  return {
+    seed: newSeed(),
+    startLevel: store.get('startLevel'),
+    mode: store.get('mode'),
+  };
+}
+
+let state: GameState = createGame(nextRunOptions());
 
 /**
  * What the last run did to the personal bests, or `null` before the first game
@@ -195,17 +212,21 @@ function setState(nextState: GameState): void {
       audio.play('hardDrop');
     } else if (event.type === 'levelUp') {
       audio.play('levelUp');
-    } else if (event.type === 'gameOver') {
-      audio.play('gameOver');
+    } else if (event.type === 'runEnd') {
+      // Reaching a finish line and falling over are not the same news, and the
+      // cabinet should not use the same three notes for both.
+      audio.play(event.outcome === 'toppedOut' ? 'gameOver' : 'finish');
       // The one moment the stats change. Recording it here — rather than from
       // the panel that shows it — means a run counts even if the player closes
       // the tab before the panel finishes fading in.
       lastResult = store.recordRun({
+        mode: event.mode,
+        outcome: event.outcome,
         score: event.score,
         lines: event.lines,
         level: event.level,
         startLevel: state.startLevel,
-        durationMs: state.elapsedMs,
+        durationMs: event.durationMs,
       });
       focusPlayAgain = true;
     } else if (event.type === 'hold') {
@@ -215,7 +236,7 @@ function setState(nextState: GameState): void {
     // The end of a run is the one event whose sentence depends on more than
     // the event: "game over" plus what it did to the bests.
     const message =
-      event.type === 'gameOver' && lastResult !== null
+      event.type === 'runEnd' && lastResult !== null
         ? describeRunEnd(lastResult)
         : describeEvent(event);
     if (message !== null) {
@@ -243,7 +264,8 @@ function startFreshGame(): void {
   closeMenus();
   lastResult = null;
   focusPlayAgain = false;
-  setState(createGame({ seed: newSeed(), startLevel: store.get('startLevel') }));
+  urgencyStep = null;
+  setState(createGame(nextRunOptions()));
   send({ type: 'resume' });
   draw();
   shell.playfield.focus();
@@ -531,12 +553,37 @@ shell.pauseHelp.addEventListener('click', () => {
   helpPanel.open();
 });
 
+/**
+ * The step of the countdown the cabinet has already blipped for.
+ *
+ * The last ten seconds of an Ultra and the last few lines of a Sprint each want
+ * one cue *per step*, not one per frame — so the step the engine is on is
+ * compared with the last one that made a noise, and only a change is audible.
+ * The visible half of the same tell is a class on the readout, which the HUD
+ * puts there from the same `runUrgency` call.
+ */
+let urgencyStep: number | null = null;
+
+/** Blip once each time the finish line gets one step closer. */
+function soundForUrgency(): void {
+  const { urgent, step } = runUrgency(state);
+  if (!urgent || step === null) {
+    urgencyStep = null;
+    return;
+  }
+  if (step !== urgencyStep) {
+    urgencyStep = step;
+    audio.play('tick');
+  }
+}
+
 const loop = createLoop({
   onFrame(deltaMs) {
     input.update(deltaMs);
     touch.update(deltaMs);
     countdown.update(deltaMs);
     setState(update(state, deltaMs));
+    soundForUrgency();
     // After the state, so the score count-up is always chasing a current
     // target, and with the same delta the engine got.
     effects.update(deltaMs, state.score);
@@ -639,6 +686,41 @@ shell.restartButton.addEventListener('click', startFreshGame);
 shell.overlayHelp.addEventListener('click', () => helpPanel.open());
 
 /**
+ * The start screen's mode picker.
+ *
+ * Three real buttons rather than a fourth select, because the choice deserves
+ * its blurb: "clear 40 lines as fast as you can" is the thing that makes
+ * somebody try Sprint, and it does not fit in an `<option>`. `aria-pressed` is
+ * what makes the current choice a fact rather than a colour — the stylesheet
+ * reads off the same attribute, so the two cannot disagree.
+ */
+function applyMode(): void {
+  const current = store.get('mode');
+  for (const [index, button] of shell.modeButtons.entries()) {
+    button.setAttribute('aria-pressed', String(GAME_MODES[index] === current));
+  }
+}
+
+for (const [index, button] of shell.modeButtons.entries()) {
+  const mode = GAME_MODES[index];
+  if (mode === undefined) {
+    continue;
+  }
+  button.addEventListener('click', () => {
+    store.set('mode', mode);
+    applyMode();
+    // Re-deal the waiting game rather than only remembering the answer, so the
+    // readout beside the well is already showing the mode's own clock and the
+    // panel is already quoting the right personal best.
+    if (state.status === 'ready') {
+      setState(createGame({ seed: state.seed, startLevel: store.get('startLevel'), mode }));
+    }
+    hud.announce(`${MODE_LABELS[mode]}. ${MODE_BLURBS[mode]}.`);
+    draw();
+  });
+}
+
+/**
  * The start screen's level picker.
  *
  * Changing it re-deals the waiting game rather than only remembering a number,
@@ -651,7 +733,7 @@ shell.startLevel.addEventListener('change', () => {
   store.set('startLevel', level);
   shell.startLevel.value = String(level);
   if (state.status === 'ready') {
-    setState(createGame({ seed: state.seed, startLevel: level }));
+    setState(createGame({ seed: state.seed, startLevel: level, mode: store.get('mode') }));
   }
   hud.announce(level === 1 ? 'Starting on level 1.' : `Starting on level ${level}.`);
   draw();
@@ -715,9 +797,10 @@ document.addEventListener('visibilitychange', () => {
 applyMotion();
 applySound();
 applyContrast();
-// The picker is markup; the remembered choice is data. Publish one into the
+// The pickers are markup; the remembered choices are data. Publish one into the
 // other before the first paint, so the attract screen opens already set.
 shell.startLevel.value = String(store.get('startLevel'));
+applyMode();
 loop.start();
 draw();
 

@@ -6,13 +6,25 @@
  * rather than something you can only find out by playing well. `ui/storage.ts`
  * persists what this module produces; `ui/hud.ts` phrases it.
  *
- * One rule shapes the shape: **a run that starts above level 1 is not measured
- * against a run that started at the bottom.** Beginning on level 8 is a head
- * start — faster gravity, but ten levels of easy scoring skipped — so those
- * runs keep their own bests and stay out of the headline number. The totals
- * (games played, lines all-time) count every run, because those are a record of
- * time spent rather than of skill.
+ * Two rules shape the shape.
+ *
+ * **A run that starts above level 1 is not measured against a run that started
+ * at the bottom.** Beginning on level 8 is a head start — faster gravity, but
+ * ten levels of easy scoring skipped — so those runs keep their own bests and
+ * stay out of the headline number.
+ *
+ * **A mode is its own record book.** Forty lines in 1:42 and 8,400 points in two
+ * minutes are not comparable achievements, and neither is comparable to an
+ * endless run, so each mode keeps a base ladder and a head-start ladder of its
+ * own. What a record even *means* changes with the mode: Marathon and Ultra are
+ * raced on the score, Sprint on the clock, where **lower is better** and only a
+ * completed forty counts at all.
+ *
+ * The totals (games played, lines all-time) count every run in every mode,
+ * because those are a record of time spent rather than of skill.
  */
+
+import { GAME_MODES, type FinishedOutcome, type GameMode } from '../engine';
 
 /** The lowest level a run may start on, and the highest the start screen offers. */
 export const MIN_START_LEVEL = 1;
@@ -41,21 +53,33 @@ export function isHeadStart(startLevel: number): boolean {
 // The shapes
 // ---------------------------------------------------------------------------
 
-/** The furthest a player has got, in each of the three things a run produces. */
+/**
+ * The furthest a player has got on one ladder.
+ *
+ * The same four numbers in every mode, read differently in each: in Marathon
+ * and Ultra `score` is the record and `durationMs` is the clock the record run
+ * happened to take, while in Sprint `durationMs` **is** the record and the rest
+ * are the numbers the fastest run happened to post.
+ */
 export interface Best {
   readonly score: number;
   readonly level: number;
   readonly lines: number;
-  /** How long the record-scoring run lasted. Shown beside it, never compared. */
   readonly durationMs: number;
 }
 
-export interface Stats {
+/** One mode's two ladders: honest starts, and head starts. */
+export interface ModeBests {
   /** Bests over runs that started on level 1 — the honest headline. */
-  readonly best: Best;
+  readonly base: Best;
   /** Bests over runs that started higher up, kept apart on purpose. */
   readonly headStart: Best;
-  /** Every run that reached a game over, head start or not. */
+}
+
+export interface Stats {
+  /** One record book per mode. */
+  readonly modes: Readonly<Record<GameMode, ModeBests>>;
+  /** Every run that reached an end, in any mode, head start or not. */
   readonly gamesPlayed: number;
   /** Every line ever cleared, likewise. */
   readonly totalLines: number;
@@ -63,6 +87,9 @@ export interface Stats {
 
 /** A run, as it stood when it ended. */
 export interface RunSummary {
+  readonly mode: GameMode;
+  /** How it ended. Sprint's record book cares; the totals do not. */
+  readonly outcome: FinishedOutcome;
   readonly score: number;
   readonly lines: number;
   readonly level: number;
@@ -70,8 +97,33 @@ export interface RunSummary {
   readonly durationMs: number;
 }
 
-/** Which of the three numbers this run pushed past. */
-export type RecordKind = 'score' | 'level' | 'lines';
+/** Which of the four numbers this run pushed past. */
+export type RecordKind = 'score' | 'level' | 'lines' | 'time';
+
+/**
+ * What each mode races on — the one number the panel shouts about — and the
+ * lesser records it still bothers to track.
+ *
+ * Sprint tracks nothing but the clock on purpose: a completed sprint is always
+ * forty lines, so "most lines" would be a record every player ties on their
+ * first finish, and a score record would reward stacking rather than speed.
+ */
+export const MODE_HEADLINE: Readonly<Record<GameMode, RecordKind>> = {
+  marathon: 'score',
+  sprint: 'time',
+  ultra: 'score',
+};
+
+const MODE_RECORDS: Readonly<Record<GameMode, readonly RecordKind[]>> = {
+  marathon: ['score', 'lines', 'level'],
+  sprint: ['time'],
+  ultra: ['score', 'lines', 'level'],
+};
+
+/** The records a mode keeps, in the order the run-summary panel lists them. */
+export function recordsFor(mode: GameMode): readonly RecordKind[] {
+  return MODE_RECORDS[mode];
+}
 
 /** The answer `applyRun` gives: new stats, plus what was worth celebrating. */
 export interface StatsUpdate {
@@ -81,8 +133,11 @@ export interface StatsUpdate {
   /** The bests as they stood *before* the run, in the ladder it belongs to. */
   readonly previousBest: Best;
   readonly records: readonly RecordKind[];
-  /** Beat the stored high score — the one the panel shouts about. */
-  readonly isHighScore: boolean;
+  /**
+   * Beat the number this mode is actually raced on — the high score in
+   * Marathon and Ultra, the clock in Sprint. The one the panel shouts about.
+   */
+  readonly isHeadlineRecord: boolean;
   /** The run started above level 1, so it was measured on the second ladder. */
   readonly headStart: boolean;
 }
@@ -95,8 +150,20 @@ export function emptyBest(): Best {
   return { score: 0, level: 0, lines: 0, durationMs: 0 };
 }
 
+export function emptyModeBests(): ModeBests {
+  return { base: emptyBest(), headStart: emptyBest() };
+}
+
 export function defaultStats(): Stats {
-  return { best: emptyBest(), headStart: emptyBest(), gamesPlayed: 0, totalLines: 0 };
+  return {
+    modes: {
+      marathon: emptyModeBests(),
+      sprint: emptyModeBests(),
+      ultra: emptyModeBests(),
+    },
+    gamesPlayed: 0,
+    totalLines: 0,
+  };
 }
 
 function isRecordObject(value: unknown): value is Record<string, unknown> {
@@ -124,12 +191,26 @@ function sanitizeBest(raw: unknown): Best {
   };
 }
 
+function sanitizeModeBests(raw: unknown): ModeBests {
+  const source = isRecordObject(raw) ? raw : {};
+  return {
+    base: sanitizeBest(source['base']),
+    headStart: sanitizeBest(source['headStart']),
+  };
+}
+
 /** Any parsed value at all, coerced into a usable `Stats`. Never throws. */
 export function sanitizeStats(raw: unknown): Stats {
   const source = isRecordObject(raw) ? raw : {};
+  const modes = isRecordObject(source['modes']) ? source['modes'] : {};
+  // Built from the engine's own list, so a mode added there cannot be silently
+  // dropped by the store on the way back in.
+  const bests = {} as Record<GameMode, ModeBests>;
+  for (const mode of GAME_MODES) {
+    bests[mode] = sanitizeModeBests(modes[mode]);
+  }
   return {
-    best: sanitizeBest(source['best']),
-    headStart: sanitizeBest(source['headStart']),
+    modes: bests,
     gamesPlayed: count(source['gamesPlayed']),
     totalLines: count(source['totalLines']),
   };
@@ -139,27 +220,53 @@ export function sanitizeStats(raw: unknown): Stats {
 // The update
 // ---------------------------------------------------------------------------
 
-/** The ladder a run beginning on `startLevel` is measured against. */
-export function bestFor(stats: Stats, startLevel: number): Best {
-  return isHeadStart(startLevel) ? stats.headStart : stats.best;
+/** The ladder a run of this mode beginning on `startLevel` is measured against. */
+export function bestFor(stats: Stats, mode: GameMode, startLevel: number): Best {
+  const bests = stats.modes[mode];
+  return isHeadStart(startLevel) ? bests.headStart : bests.base;
 }
 
-/** Has this player finished anything at all on either ladder? */
+/** Has this player finished anything at all, in any mode, on either ladder? */
 export function hasAnyBest(stats: Stats): boolean {
-  return stats.gamesPlayed > 0 || stats.best.score > 0 || stats.headStart.score > 0;
+  if (stats.gamesPlayed > 0) {
+    return true;
+  }
+  return GAME_MODES.some((mode) => {
+    const bests = stats.modes[mode];
+    return bests.base.score > 0 || bests.headStart.score > 0;
+  });
+}
+
+/** A Sprint that actually reached its goal — the only kind that sets a time. */
+export function isSprintFinish(run: RunSummary): boolean {
+  return run.mode === 'sprint' && run.outcome === 'goalReached';
+}
+
+/** One mode's ladders, with `next` written into the one `headStart` names. */
+function withLadder(bests: ModeBests, headStart: boolean, next: Best): ModeBests {
+  return headStart ? { ...bests, headStart: next } : { ...bests, base: next };
 }
 
 /**
  * Fold a finished run into the stats.
  *
- * Pure, and the only place records are decided. Records are strict: equalling
- * a best is not beating it, so a repeat of yesterday's score does not set off
- * the confetti. The duration stored beside a best belongs to the run that set
- * the *score* record, which is why it moves only when the score does.
+ * Pure, and the only place records are decided. Records are strict: equalling a
+ * best is not beating it, so a repeat of yesterday's score does not set off the
+ * confetti — and a Sprint that ties your fastest forty is a tie, not a record.
+ *
+ * The two record shapes differ, and the difference is the point. A *bigger is
+ * better* number is folded in one at a time: beat the score and the stored
+ * score moves, beat the lines and the stored lines move, and the duration
+ * beside them belongs to the run that set the score. Sprint's *lower is better*
+ * clock cannot work that way — a best time is a run, not a collection of
+ * high-water marks — so beating it replaces the whole record with the run that
+ * did it, and failing to finish leaves it entirely alone.
  */
 export function applyRun(stats: Stats, run: RunSummary): StatsUpdate {
   const headStart = isHeadStart(run.startLevel);
-  const previousBest = headStart ? stats.headStart : stats.best;
+  const bests = stats.modes[run.mode];
+  const previousBest = headStart ? bests.headStart : bests.base;
+  const tracked = recordsFor(run.mode);
 
   /**
    * A run that did nothing broke nothing.
@@ -171,39 +278,51 @@ export function applyRun(stats: Stats, run: RunSummary): StatsUpdate {
    * later celebration worth less.
    */
   const counts = run.score > 0 || run.lines > 0;
+  const duration = Math.max(0, Math.floor(run.durationMs));
 
-  // In the order the game-over panel lists them, so a caller that wants to say
-  // "score and lines" reads the list top to bottom.
+  // In the order the run-summary panel lists them, so a caller that wants to
+  // say "score and lines" reads the list top to bottom.
   const records: RecordKind[] = [];
-  if (counts && run.score > previousBest.score) {
+  if (tracked.includes('score') && counts && run.score > previousBest.score) {
     records.push('score');
   }
-  if (counts && run.lines > previousBest.lines) {
+  if (tracked.includes('lines') && counts && run.lines > previousBest.lines) {
     records.push('lines');
   }
-  if (counts && run.level > previousBest.level) {
+  if (tracked.includes('level') && counts && run.level > previousBest.level) {
     records.push('level');
   }
+  // A did-not-finish has no time to record. This is the whole of the DNF rule:
+  // the run still counts in the totals, it simply never reaches the clock.
+  if (
+    tracked.includes('time') &&
+    isSprintFinish(run) &&
+    (previousBest.durationMs === 0 || duration < previousBest.durationMs)
+  ) {
+    records.push('time');
+  }
 
-  const isHighScore = records.includes('score');
-  const nextBest: Best = {
-    score: Math.max(previousBest.score, run.score),
-    level: Math.max(previousBest.level, run.level),
-    lines: Math.max(previousBest.lines, run.lines),
-    durationMs: isHighScore ? Math.max(0, Math.floor(run.durationMs)) : previousBest.durationMs,
-  };
+  const isHeadlineRecord = records.includes(MODE_HEADLINE[run.mode]);
+
+  const nextBest: Best = records.includes('time')
+    ? { score: run.score, level: run.level, lines: run.lines, durationMs: duration }
+    : {
+        score: Math.max(previousBest.score, tracked.includes('score') ? run.score : 0),
+        level: Math.max(previousBest.level, tracked.includes('level') ? run.level : 0),
+        lines: Math.max(previousBest.lines, tracked.includes('lines') ? run.lines : 0),
+        durationMs: records.includes('score') ? duration : previousBest.durationMs,
+      };
 
   return {
     stats: {
-      best: headStart ? stats.best : nextBest,
-      headStart: headStart ? nextBest : stats.headStart,
+      modes: { ...stats.modes, [run.mode]: withLadder(bests, headStart, nextBest) },
       gamesPlayed: stats.gamesPlayed + 1,
       totalLines: stats.totalLines + count(run.lines),
     },
     run,
     previousBest,
     records,
-    isHighScore,
+    isHeadlineRecord,
     headStart,
   };
 }
