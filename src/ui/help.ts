@@ -1,8 +1,9 @@
 /**
  * The in-game help panel's content.
  *
- * Every row in it is *derived*, not retyped. The keyboard list comes from
- * `KEY_BINDINGS`; the scoring table from `LINE_CLEAR_POINTS`, the two spin
+ * Every row in it is *derived*, not retyped. The keyboard list comes from the
+ * `BindingTable` in force — so a rebound key moves this panel with it, and the
+ * panel is rebuilt when it does; the scoring table from `LINE_CLEAR_POINTS`, the two spin
  * tables, the combo step, the back-to-back multiplier and the two drop bonuses.
  * Rebinding a key or retuning a score therefore updates the help by itself. A
  * help panel that can drift out of date is worse than no help panel, and the
@@ -30,7 +31,7 @@ import {
   SPIN_POINTS,
 } from '../engine';
 import { CLEAR_NAMES, CLEAR_SIZES, MODE_BLURBS, MODE_LABELS } from './hud';
-import { KEY_BINDINGS, describeBinding } from './input';
+import { DEFAULT_BINDINGS, describeBinding, type BindingTable } from './input';
 
 /** One line of the help: what you do on the left, what happens on the right. */
 export interface HelpRow {
@@ -39,9 +40,12 @@ export interface HelpRow {
   readonly detail: string;
 }
 
-/** The keyboard controls, straight off the binding table. */
-export function keyboardRows(): readonly HelpRow[] {
-  return KEY_BINDINGS.map((binding) => ({
+/**
+ * The keyboard controls, straight off whichever binding table is in force —
+ * so a rebound key changes what this panel says, with no second copy to update.
+ */
+export function keyboardRows(bindings: BindingTable = DEFAULT_BINDINGS): readonly HelpRow[] {
+  return bindings.list.map((binding) => ({
     term: describeBinding(binding),
     detail: binding.label,
   }));
@@ -127,7 +131,7 @@ export const MECHANIC_NOTES: readonly HelpRow[] = [
   {
     term: 'Spin',
     detail:
-      'Turn a piece into a gap it could not have been slid into — the last thing you do before it locks is the rotation, and it can no longer move left, right or down. Any piece can do it, and it scores whether or not it clears.',
+      'Turn a piece into a gap it could not have slid into: rotate last, with nowhere left to move. Any piece can, and it scores whether or not it clears.',
   },
 ];
 
@@ -138,9 +142,9 @@ export const MECHANIC_NOTES: readonly HelpRow[] = [
  * replay is on the well, so they are read out of `KEY_BINDINGS` rather than
  * retyped — rebind "pause" and this panel follows.
  */
-export function replayRows(): readonly HelpRow[] {
+export function replayRows(bindings: BindingTable = DEFAULT_BINDINGS): readonly HelpRow[] {
   const keys = (action: string): string => {
-    const binding = KEY_BINDINGS.find((candidate) => candidate.action === action);
+    const binding = bindings.list.find((candidate) => candidate.action === action);
     return binding === undefined ? '' : describeBinding(binding);
   };
   return [
@@ -204,17 +208,18 @@ function section(id: string, title: string, rows: readonly HelpRow[], termClass:
  * Short on purpose: a few sentences and four lists. Anyone who wants a manual
  * has the README; anyone who is mid-game wants to find one key and get out.
  */
-export function helpBodyMarkup(): string {
+export function helpBodyMarkup(bindings: BindingTable = DEFAULT_BINDINGS): string {
   return `
     <p class="help__lede">
       Stack the falling pieces so they fill a whole row — full rows clear and
-      score. The game speeds up every ten lines.
+      score. The game speeds up every ten lines. Settings remaps every key
+      below and tunes how held ones repeat.
     </p>
     ${section('help-modes', 'Modes', modeRows(), 'help__term')}
-    ${section('help-keys', 'Keyboard', keyboardRows(), 'help__keys')}
+    ${section('help-keys', 'Keyboard', keyboardRows(bindings), 'help__keys')}
     ${section('help-touch', 'Touch', TOUCH_GESTURES, 'help__term')}
     ${section('help-scoring', 'Scoring', scoringRows(), 'help__term')}
     ${section('help-mechanics', 'Hold, ghost and spins', MECHANIC_NOTES, 'help__term')}
-    ${section('help-replays', 'Replays and sharing', replayRows(), 'help__term')}
+    ${section('help-replays', 'Replays and sharing', replayRows(bindings), 'help__term')}
   `;
 }

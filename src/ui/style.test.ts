@@ -202,6 +202,9 @@ const TEXT_PAIRS: readonly Pair[] = [
     under: '--well',
   },
   { what: 'the shareable line in its fallback box', fg: '--fg', bg: '--panel-canvas' },
+  // The settings dialog: each key row sits on the same inset the reset
+  // confirmation uses, and "Not bound" is muted text on it.
+  { what: 'an unbound row in the key remapper', fg: '--fg-muted', bg: '--panel-canvas' },
 ];
 
 /** Control boundaries and focus rings: WCAG 1.4.11 wants 3:1. */
@@ -236,6 +239,9 @@ const UI_PAIRS: readonly Pair[] = [
     under: '--well',
   },
   { what: 'the share fallback’s border on its inset', fg: '--edge', bg: '--panel-canvas' },
+  // The try-it strip's block against the strip it slides along: the whole
+  // point of it is watching the block move, so it has to be visible doing it.
+  { what: 'the try-it block against its strip', fg: '--accent', bg: '--panel-canvas' },
 ];
 
 /** The ratio a pair actually achieves in a given palette. */

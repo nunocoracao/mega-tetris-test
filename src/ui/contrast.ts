@@ -147,6 +147,8 @@ export interface ContrastPreference {
   setting(): ContrastSetting;
   /** Advance the toggle one step and persist the result. */
   cycle(): ContrastSetting;
+  /** Set it outright, as the settings dialog's radio group does. */
+  set(setting: ContrastSetting): ContrastSetting;
   label(): string;
   destroy(): void;
 }
@@ -174,17 +176,20 @@ export function createContrastPreference(
     options.onChange?.(high, setting);
   }
 
+  function set(next: ContrastSetting): ContrastSetting {
+    setting = next;
+    options.storage?.write(setting);
+    reconcile();
+    return setting;
+  }
+
   query?.addEventListener('change', reconcile);
 
   return {
     high: () => high,
     setting: () => setting,
-    cycle(): ContrastSetting {
-      setting = nextContrastSetting(setting);
-      options.storage?.write(setting);
-      reconcile();
-      return setting;
-    },
+    cycle: () => set(nextContrastSetting(setting)),
+    set,
     label: () => contrastSettingLabel(setting),
     destroy(): void {
       query?.removeEventListener('change', reconcile);

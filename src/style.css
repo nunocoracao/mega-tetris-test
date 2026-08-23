@@ -1462,6 +1462,321 @@ body {
   text-wrap: pretty;
 }
 
+/* ------------------------------------------------------ settings panel -- */
+
+/*
+ * The start screen's two quiet buttons, side by side under the primary one.
+ */
+.overlay__minor {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.45rem;
+}
+
+.overlay__minor[hidden] {
+  display: none;
+}
+
+/*
+ * The one line that explains what just happened: a conflict, a reserved key, a
+ * capture waiting for a press. It is *words*, never a colour — a refusal
+ * signalled by a red border would be no refusal at all for a good many players.
+ * Empty until there is something to say, and it takes no room when it is.
+ */
+.settings__message {
+  margin: 0 0 0.5rem;
+  min-height: 1.2em;
+  font-size: 0.75rem;
+  color: var(--fg);
+  text-wrap: pretty;
+}
+
+.settings__message:empty {
+  min-height: 0;
+  margin: 0;
+}
+
+/* A checkbox that still looks like a checkbox, because that is what it is. */
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.2rem;
+  font-size: 0.8rem;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.switch input {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--accent);
+}
+
+.switch__name {
+  font-weight: 600;
+}
+
+/* -- three-way preferences, as radio groups -- */
+
+.choice {
+  margin: 0.6rem 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.choice__legend {
+  padding: 0;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.choice__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.9rem;
+  margin-top: 0.3rem;
+}
+
+.choice__option {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.2rem;
+  font-size: 0.78rem;
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.choice__option input {
+  width: 1.05rem;
+  height: 1.05rem;
+  accent-color: var(--accent);
+}
+
+.choice__hint {
+  margin: 0.2rem 0 0;
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+  text-wrap: pretty;
+}
+
+/* -- handling sliders -- */
+
+/*
+ * Label, value and range in one small grid: the number sits beside the name so
+ * it can be read without hunting, and the hint runs the full width underneath.
+ */
+.slider {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0.15rem 0.6rem;
+  margin-bottom: 0.7rem;
+}
+
+.slider__label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.slider__value {
+  justify-self: end;
+  font-family: var(--font-numeric);
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.slider__input {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: 1.6rem;
+  accent-color: var(--accent);
+}
+
+.slider__hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+  text-wrap: pretty;
+}
+
+/* -- the try-it strip -- */
+
+.try {
+  margin: 0.2rem 0 0.8rem;
+}
+
+.try__hint {
+  margin: 0 0 0.35rem;
+  font-size: 0.7rem;
+  color: var(--fg-muted);
+  text-wrap: pretty;
+}
+
+.try__row {
+  display: flex;
+  align-items: stretch;
+  gap: 0.4rem;
+}
+
+.try__button {
+  flex: 0 0 auto;
+  min-width: 2.75rem;
+  touch-action: manipulation;
+}
+
+/*
+ * Ten cells wide, one block in it, moved by the same repeat clock the game
+ * uses. The block is positioned as a fraction of the track, so the strip can be
+ * any width and the columns still line up with the cells behind it.
+ */
+.try__field {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 2.4rem;
+  padding: 0.25rem;
+  border: var(--control-border-width) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--panel-canvas);
+  overflow: hidden;
+}
+
+.try__track {
+  display: grid;
+  grid-template-columns: repeat(var(--try-columns, 10), 1fr);
+  gap: 0.1rem;
+  height: 1.7rem;
+}
+
+.try__cell {
+  border-radius: 0.15rem;
+  background: var(--well-deep);
+}
+
+.try__block {
+  position: absolute;
+  top: 0.25rem;
+  left: 0.25rem;
+  width: calc((100% - 0.5rem) / var(--try-columns, 10));
+  height: 1.7rem;
+  border: var(--control-border-width) solid var(--accent);
+  border-radius: 0.2rem;
+  background: var(--accent);
+  transform: translateX(calc(var(--try-column, 4) * 100%));
+}
+
+/*
+ * No transition: the whole point of the strip is to show the *timing*, and an
+ * eased slide over the top of it would be showing the easing instead.
+ */
+
+/* -- the key remapper -- */
+
+.keymap {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.keyrow {
+  display: grid;
+  grid-template-columns: minmax(6rem, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.3rem 0.5rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: var(--radius-sm);
+  background: var(--panel-canvas);
+}
+
+.keyrow__action {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.keyrow__keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.keyrow__empty {
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+}
+
+.keyrow__buttons {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.keyrow__button {
+  font-size: 0.7rem;
+  padding: 0.3rem 0.5rem;
+  min-height: 2.2rem;
+}
+
+/* A cap with its own little "take this one off" button welded to the side. */
+.keycap {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--edge);
+  border-radius: 0.3rem;
+  background: var(--cabinet);
+  overflow: hidden;
+}
+
+.keycap__label {
+  padding: 0.15rem 0.35rem;
+  font-family: var(--font-numeric);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+  align-self: center;
+}
+
+.keycap__clear {
+  min-width: 1.5rem;
+  padding: 0 0.25rem;
+  border: 0;
+  border-inline-start: 1px solid var(--edge);
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.8rem;
+  line-height: 1;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.keycap__clear:hover {
+  filter: brightness(1.35);
+}
+
+@media (max-width: 30rem) {
+  /* The row folds: name and keys on top, the two buttons underneath. */
+  .keyrow {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .keyrow__keys {
+    grid-column: 1 / -1;
+  }
+}
+
 /* ----------------------------------------------------------- countdown -- */
 
 /*

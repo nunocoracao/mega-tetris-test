@@ -70,6 +70,8 @@ export interface MotionPreference {
   setting(): MotionSetting;
   /** Advance the toggle one step and persist the result. */
   cycle(): MotionSetting;
+  /** Set it outright, as the settings dialog's radio group does. */
+  set(setting: MotionSetting): MotionSetting;
   label(): string;
   destroy(): void;
 }
@@ -106,17 +108,20 @@ export function createMotionPreference(options: MotionPreferenceOptions = {}): M
     options.onChange?.(reduced, setting);
   }
 
+  function set(next: MotionSetting): MotionSetting {
+    setting = next;
+    options.storage?.write(setting);
+    reconcile();
+    return setting;
+  }
+
   query?.addEventListener('change', reconcile);
 
   return {
     reduced: () => reduced,
     setting: () => setting,
-    cycle(): MotionSetting {
-      setting = nextMotionSetting(setting);
-      options.storage?.write(setting);
-      reconcile();
-      return setting;
-    },
+    cycle: () => set(nextMotionSetting(setting)),
+    set,
     label: () => motionSettingLabel(setting),
     destroy(): void {
       query?.removeEventListener('change', reconcile);

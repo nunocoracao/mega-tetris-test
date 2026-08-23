@@ -23,8 +23,9 @@
  */
 
 import { GAME_MODES } from '../engine';
+import { CONTRAST_SETTINGS, contrastSettingLabel } from './contrast';
 import { DAILY_HISTORY_DAYS } from './daily';
-import { helpBodyMarkup } from './help';
+import { escapeHtml, helpBodyMarkup } from './help';
 import {
   MENU_STATS,
   MODE_BLURBS,
@@ -33,10 +34,20 @@ import {
   OVERLAY_ROW_LABELS,
   READOUT_ROW_KEYS,
 } from './hud';
-import { KEY_BINDINGS, describeBinding } from './input';
+import {
+  ACTION_IDS,
+  DEFAULT_BINDINGS,
+  DEFAULT_HANDLING,
+  HANDLING_BOUNDS,
+  actionLabel,
+  describeBinding,
+  type BindingTable,
+} from './input';
+import { MOTION_SETTINGS, motionSettingLabel } from './motion';
 import { REPLAY_SPEEDS, replaySpeedLabel } from './replay';
+import { TRY_COLUMNS, formatMs, type SettingsElements } from './settings';
 import { START_LEVELS } from './stats';
-import { TOUCH_PAD_BUTTONS } from './touch';
+import { PAD_PREFERENCES, TOUCH_PAD_BUTTONS, padPreferenceLabel } from './touch';
 
 export interface Shell {
   /** Focusable wrapper around the playfield — the game's keyboard home. */
@@ -82,8 +93,12 @@ export interface Shell {
   readonly startLevel: HTMLSelectElement;
   /** The three mode buttons, in the order the engine lists them. */
   readonly modeButtons: readonly HTMLButtonElement[];
+  /** The start screen's two quiet buttons: help, and settings. */
+  readonly overlayMinor: HTMLElement;
   /** Opens the help panel from the start screen. */
   readonly overlayHelp: HTMLButtonElement;
+  /** Opens the settings dialog from the start screen. */
+  readonly overlaySettings: HTMLButtonElement;
   readonly overlayButton: HTMLButtonElement;
   /** The 3-2-1 shown over the well on the way back from a pause. */
   readonly countdown: HTMLElement;
@@ -110,6 +125,8 @@ export interface Shell {
   readonly playButton: HTMLButtonElement;
   readonly restartButton: HTMLButtonElement;
   readonly helpButton: HTMLButtonElement;
+  /** Opens the settings dialog from the footer. */
+  readonly settingsButton: HTMLButtonElement;
   /**
    * Offers to install the cabinet. Hidden unless the browser has actually said
    * there is an installation to offer — see `ui/pwa.ts`.
@@ -125,6 +142,8 @@ export interface Shell {
   readonly updateDismiss: HTMLButtonElement;
   /** The on-screen control pad. Hidden or shown by `ui/touch.ts`. */
   readonly touchPad: HTMLElement;
+  /** The pad's seven buttons, so `applyBindings` can retitle them. */
+  readonly padButtons: readonly HTMLButtonElement[];
   /** Cycles the pad between auto, forced on and forced off. */
   readonly padToggle: HTMLButtonElement;
   /** Mutes and unmutes the synthesised cues. */
@@ -142,6 +161,8 @@ export interface Shell {
   readonly pauseResume: HTMLButtonElement;
   readonly pauseRestart: HTMLButtonElement;
   readonly pauseHelp: HTMLButtonElement;
+  /** Steps sideways from the pause menu into the settings dialog. */
+  readonly pauseSettings: HTMLButtonElement;
   readonly pauseClose: HTMLButtonElement;
   /** The personal-bests readout inside the pause menu. */
   readonly menuStats: HTMLElement;
@@ -159,6 +180,13 @@ export interface Shell {
   readonly helpPanel: HTMLElement;
   readonly helpClose: HTMLButtonElement;
   readonly helpDone: HTMLButtonElement;
+  /** The help panel's generated body, rewritten when a key is rebound. */
+  readonly helpBody: HTMLElement;
+  /** The controls card beside the well, likewise. */
+  readonly controlsList: HTMLElement;
+  readonly settingsDialog: HTMLElement;
+  /** Everything inside the settings dialog, for `ui/settings.ts`. */
+  readonly settings: SettingsElements;
   /**
    * Everything that is not a dialog. Made `inert` while one is open, so the
    * game behind cannot be tabbed into, clicked, or read out from under it.
@@ -176,14 +204,41 @@ function must<T extends Element>(root: ParentNode, selector: string): T {
 }
 
 /** The controls list, generated from the binding table so it cannot drift. */
-function controlsMarkup(): string {
-  return KEY_BINDINGS.map(
-    (binding) =>
-      `<div class="controls__row">
-         <dt class="controls__keys">${describeBinding(binding)}</dt>
-         <dd class="controls__label">${binding.label}</dd>
+function controlsMarkup(bindings: BindingTable): string {
+  return bindings.list
+    .map(
+      (binding) =>
+        `<div class="controls__row">
+         <dt class="controls__keys">${escapeHtml(describeBinding(binding))}</dt>
+         <dd class="controls__label">${escapeHtml(binding.label)}</dd>
        </div>`,
-  ).join('');
+    )
+    .join('');
+}
+
+/**
+ * Republish the bindings into every place that shows them.
+ *
+ * Three views, one table: the controls card beside the well, the help panel's
+ * keyboard list, and the tooltip on each pad button. None of them keeps a copy,
+ * so rebinding a key is one call and cannot half-apply. `src/main.ts` subscribes
+ * this to `LiveBindings`.
+ */
+export function applyBindings(shell: Shell, bindings: BindingTable): void {
+  shell.controlsList.innerHTML = controlsMarkup(bindings);
+  shell.helpBody.innerHTML = helpBodyMarkup(bindings);
+  for (const button of shell.padButtons) {
+    const action = button.dataset['padAction'] ?? '';
+    const binding = bindings.list.find((candidate) => candidate.action === action);
+    if (binding === undefined) {
+      continue;
+    }
+    button.setAttribute('aria-label', binding.label);
+    button.title =
+      binding.keys.length === 0
+        ? binding.label
+        : `${binding.label} — ${describeBinding(binding)}`;
+  }
 }
 
 /**
@@ -394,9 +449,14 @@ function overlayMarkup(): string {
           Copy replay link
         </button>
       </div>
-      <button type="button" class="button button--quiet" data-overlay-help hidden>
-        How to play
-      </button>
+      <div class="overlay__minor" data-overlay-minor hidden>
+        <button type="button" class="button button--quiet" data-overlay-help>
+          How to play
+        </button>
+        <button type="button" class="button button--quiet" data-overlay-settings>
+          Settings
+        </button>
+      </div>
       <!--
         The clipboard's fallback, the same arrangement the daily block uses and
         for the same reason: the clipboard is a permission, not a guarantee.
@@ -495,6 +555,12 @@ function pauseDialogMarkup(): string {
           <button type="button" class="button" data-pause-restart>Restart</button>
           <button type="button" class="button" data-pause-help>Help</button>
         </div>
+        <!--
+          The four quick toggles stay here even though the settings dialog has
+          the same four in labelled groups. Mid-run, "turn the sound off" should
+          be one tap from the pause menu, not two dialogs deep — and neither
+          copy holds any state: both write through the same accessor.
+        -->
         <section class="modal__section" aria-labelledby="pause-settings-title">
           <h3 class="modal__heading" id="pause-settings-title">Settings</h3>
           <div class="settings">
@@ -502,6 +568,9 @@ function pauseDialogMarkup(): string {
             <button type="button" class="button button--quiet" data-motion-toggle>Effects: Auto</button>
             <button type="button" class="button button--quiet" data-contrast-toggle>Contrast: Auto</button>
             <button type="button" class="button button--quiet" data-pad-toggle>Touchpad: Auto</button>
+            <button type="button" class="button button--quiet" data-pause-settings>
+              Keys and handling…
+            </button>
           </div>
         </section>
         <section class="modal__section" aria-labelledby="pause-bests-title">
@@ -536,6 +605,266 @@ function pauseDialogMarkup(): string {
   `;
 }
 
+/**
+ * One three-way preference, as a radio group.
+ *
+ * Radios rather than the footer's cycling button: a dialog has room to show all
+ * three answers at once, and "which of these is chosen" is a thing a radio group
+ * says out loud without anybody having to press it to find out. The labels come
+ * from the module that owns each vocabulary, so there is no second copy of the
+ * word "Reduced" anywhere.
+ */
+function choiceMarkup(
+  name: string,
+  legend: string,
+  hint: string,
+  values: readonly string[],
+  label: (value: string) => string,
+): string {
+  const options = values
+    .map(
+      (value) =>
+        `<label class="choice__option">
+           <input type="radio" name="settings-${name}" value="${escapeHtml(value)}" data-choice="${name}">
+           <span class="choice__name">${escapeHtml(label(value))}</span>
+         </label>`,
+    )
+    .join('');
+  return `
+    <fieldset class="choice">
+      <legend class="choice__legend">${escapeHtml(legend)}</legend>
+      <div class="choice__options">${options}</div>
+      <p class="choice__hint">${escapeHtml(hint)}</p>
+    </fieldset>
+  `;
+}
+
+/** One handling slider, its units and its explanation. */
+function sliderMarkup(): string {
+  return HANDLING_BOUNDS.map((bound) => {
+    const id = `handling-${bound.key}`;
+    return `
+      <div class="slider">
+        <label class="slider__label" for="${id}">${escapeHtml(bound.label)}</label>
+        <!-- The number sits beside the name rather than under the track, so
+             the value can be read without following the thumb. -->
+        <output class="slider__value" for="${id}" data-handling-value="${bound.key}">${escapeHtml(
+          formatMs(DEFAULT_HANDLING[bound.key]),
+        )}</output>
+        <input
+          class="slider__input"
+          type="range"
+          id="${id}"
+          data-handling="${bound.key}"
+          min="${bound.min}"
+          max="${bound.max}"
+          step="${bound.step}"
+          value="${DEFAULT_HANDLING[bound.key]}"
+          aria-describedby="${id}-hint"
+        >
+        <p class="slider__hint" id="${id}-hint">${escapeHtml(bound.hint)}</p>
+      </div>
+    `;
+  }).join('');
+}
+
+/**
+ * The try-it strip: the sliders' output, in a form you can feel.
+ *
+ * A number in milliseconds means nothing until a block moves at it. The strip
+ * borrows the game's own repeat clock and the player's own move keys, so what
+ * happens here is exactly what will happen to a piece — and the two buttons
+ * beside it make that true on a phone as well, where there is no key to hold.
+ */
+function tryMarkup(): string {
+  const cells = Array.from(
+    { length: TRY_COLUMNS },
+    () => '<span class="try__cell"></span>',
+  ).join('');
+  return `
+    <div class="try">
+      <p class="try__hint" id="try-hint">
+        Hold your move keys here — or the arrows beside it — to feel the numbers above.
+      </p>
+      <div class="try__row">
+        <button
+          type="button"
+          class="button button--quiet try__button"
+          data-try-button="moveLeft"
+          aria-label="Try moving left"
+        ><span aria-hidden="true">◀</span></button>
+        <div
+          class="try__field"
+          tabindex="0"
+          role="application"
+          aria-label="Handling tryout"
+          aria-describedby="try-hint"
+          data-try-field
+        >
+          <span class="try__track" aria-hidden="true">${cells}</span>
+          <span class="try__block" aria-hidden="true" data-try-block></span>
+        </div>
+        <button
+          type="button"
+          class="button button--quiet try__button"
+          data-try-button="moveRight"
+          aria-label="Try moving right"
+        ><span aria-hidden="true">▶</span></button>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * One row of the key remapper: what it does, what it answers to, and the two
+ * buttons that change it. The keys themselves are written in by
+ * `ui/settings.ts` — they move, and the row does not.
+ */
+function keymapMarkup(): string {
+  return ACTION_IDS.map((action) => {
+    const label = actionLabel(action);
+    return `
+      <li class="keyrow" data-key-row="${action}">
+        <span class="keyrow__action">${escapeHtml(label)}</span>
+        <span class="keyrow__keys" data-key-keys="${action}"></span>
+        <span class="keyrow__buttons">
+          <button
+            type="button"
+            class="button button--quiet keyrow__button"
+            data-key-bind="${action}"
+            aria-pressed="false"
+            aria-label="Add a key for ${escapeHtml(label)}"
+          >Add key</button>
+          <button
+            type="button"
+            class="button button--quiet keyrow__button"
+            data-key-reset="${action}"
+            aria-label="Reset ${escapeHtml(label)} to its default keys"
+          >Default</button>
+        </span>
+      </li>
+    `;
+  }).join('');
+}
+
+/**
+ * The settings dialog.
+ *
+ * A dialog rather than a screen: the game underneath is untouched, which is
+ * what lets a player open it mid-run, move DAS by ten milliseconds and carry on
+ * with the same piece still where they left it.
+ *
+ * The four quick toggles stay in the pause menu as well as living here. That is
+ * a deliberate duplication of *controls* and not of state — both write through
+ * the same accessor — because a player who paused to turn the sound off should
+ * not have to open a second dialog to do it.
+ */
+function settingsDialogMarkup(): string {
+  return `
+    <div class="modal" data-settings-dialog hidden>
+      <div
+        class="modal__panel modal__panel--wide"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        tabindex="-1"
+        data-settings-panel
+      >
+        ${closeButtonMarkup('data-settings-close', 'Close settings')}
+        <h2 class="modal__title" id="settings-title">Settings</h2>
+
+        <section class="modal__section" aria-labelledby="settings-cabinet-title">
+          <h3 class="modal__heading" id="settings-cabinet-title">Cabinet</h3>
+          <label class="switch">
+            <input type="checkbox" data-settings-sound checked>
+            <span class="switch__name">Sound effects</span>
+          </label>
+          ${choiceMarkup(
+            'motion',
+            'Effects',
+            'Auto follows your system’s reduced-motion setting.',
+            MOTION_SETTINGS,
+            (value) => motionSettingLabel(value as (typeof MOTION_SETTINGS)[number]),
+          )}
+          ${choiceMarkup(
+            'contrast',
+            'Contrast',
+            'Auto follows your system. High thickens every block outline and marks each piece.',
+            CONTRAST_SETTINGS,
+            (value) => contrastSettingLabel(value as (typeof CONTRAST_SETTINGS)[number]),
+          )}
+          ${choiceMarkup(
+            'pad',
+            'On-screen pad',
+            'Auto shows the pad on touch or narrow screens.',
+            PAD_PREFERENCES,
+            (value) => padPreferenceLabel(value as (typeof PAD_PREFERENCES)[number]),
+          )}
+        </section>
+
+        <section class="modal__section" aria-labelledby="settings-handling-title">
+          <h3 class="modal__heading" id="settings-handling-title">Handling</h3>
+          ${sliderMarkup()}
+          ${tryMarkup()}
+          <div class="settings">
+            <button type="button" class="button button--quiet" data-handling-reset>
+              Reset handling
+            </button>
+          </div>
+        </section>
+
+        <section class="modal__section" aria-labelledby="settings-keys-title">
+          <h3 class="modal__heading" id="settings-keys-title">Keys</h3>
+          <p class="modal__foot">
+            Add a key, then press the one you want. A key already in use is
+            refused rather than stolen — clear it from the other row first.
+          </p>
+          <!--
+            The one line that explains what just happened: a conflict, a
+            reserved key, a capture waiting. Deliberately not a live region —
+            the game has exactly one, and every sentence written here goes
+            through it as well.
+          -->
+          <p class="settings__message" data-settings-message></p>
+          <ul class="keymap" data-keymap>${keymapMarkup()}</ul>
+          <div class="settings">
+            <button type="button" class="button button--quiet" data-keys-reset>
+              Reset every key
+            </button>
+          </div>
+        </section>
+
+        <section class="modal__section" aria-labelledby="settings-reset-title">
+          <h3 class="modal__heading" id="settings-reset-title">Start over</h3>
+          <div class="settings">
+            <button type="button" class="button button--quiet" data-settings-reset>
+              Reset all settings…
+            </button>
+          </div>
+          <!-- Two steps, exactly as the record book's reset has. -->
+          <div class="confirm" data-settings-confirm hidden>
+            <p class="confirm__text">
+              Put every setting — keys, handling, sound, effects, contrast and
+              pad — back to the way it shipped? Your personal bests are not
+              touched.
+            </p>
+            <div class="modal__actions">
+              <button type="button" class="button button--primary" data-settings-keep>
+                Keep mine
+              </button>
+              <button type="button" class="button" data-settings-erase>Reset everything</button>
+            </div>
+          </div>
+        </section>
+
+        <div class="modal__actions">
+          <button type="button" class="button button--primary" data-settings-done>Done</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 /** The help panel. Its content is generated in `ui/help.ts`. */
 function helpDialogMarkup(): string {
   return `
@@ -550,7 +879,7 @@ function helpDialogMarkup(): string {
       >
         ${closeButtonMarkup('data-help-close', 'Close help')}
         <h2 class="modal__title" id="help-title">How to play</h2>
-        <div class="modal__body">${helpBodyMarkup()}</div>
+        <div class="modal__body" data-help-body>${helpBodyMarkup()}</div>
         <div class="modal__actions">
           <button type="button" class="button button--primary" data-help-done>Got it</button>
         </div>
@@ -618,7 +947,7 @@ export function createShell(root: HTMLElement): Shell {
 
           <section class="panel panel--controls">
             <h2 class="panel__title">Controls</h2>
-            <dl class="controls">${controlsMarkup()}</dl>
+            <dl class="controls" data-controls-list>${controlsMarkup(DEFAULT_BINDINGS)}</dl>
           </section>
         </div>
 
@@ -637,6 +966,7 @@ export function createShell(root: HTMLElement): Shell {
         <button type="button" class="button button--primary" data-play>Play</button>
         <button type="button" class="button" data-restart>Restart</button>
         <button type="button" class="button" data-help-open>Help</button>
+        <button type="button" class="button" data-settings-open>Settings</button>
         <!--
           Beside the other actions, in the tab order, and hidden until the
           browser offers an installation. No banner, no modal, nothing over
@@ -670,6 +1000,7 @@ export function createShell(root: HTMLElement): Shell {
 
       ${pauseDialogMarkup()}
       ${helpDialogMarkup()}
+      ${settingsDialogMarkup()}
     </div>
   `;
 
@@ -711,7 +1042,9 @@ export function createShell(root: HTMLElement): Shell {
     overlayStart: must<HTMLElement>(root, '[data-overlay-start]'),
     startLevel: must<HTMLSelectElement>(root, '[data-start-level]'),
     modeButtons: GAME_MODES.map((mode) => must<HTMLButtonElement>(root, `[data-mode="${mode}"]`)),
+    overlayMinor: must<HTMLElement>(root, '[data-overlay-minor]'),
     overlayHelp: must<HTMLButtonElement>(root, '[data-overlay-help]'),
+    overlaySettings: must<HTMLButtonElement>(root, '[data-overlay-settings]'),
     overlayButton: must<HTMLButtonElement>(root, '[data-overlay-button]'),
     countdown: must<HTMLElement>(root, '[data-countdown]'),
     overlayActions: must<HTMLElement>(root, '[data-overlay-actions]'),
@@ -734,11 +1067,13 @@ export function createShell(root: HTMLElement): Shell {
     playButton: must<HTMLButtonElement>(root, '[data-play]'),
     restartButton: must<HTMLButtonElement>(root, '[data-restart]'),
     helpButton: must<HTMLButtonElement>(root, '[data-help-open]'),
+    settingsButton: must<HTMLButtonElement>(root, '[data-settings-open]'),
     installButton: must<HTMLButtonElement>(root, '[data-install]'),
     updateBar: update,
     updateReload: must<HTMLButtonElement>(root, '[data-update-reload]'),
     updateDismiss: must<HTMLButtonElement>(root, '[data-update-dismiss]'),
     touchPad: pad,
+    padButtons: [...pad.querySelectorAll<HTMLButtonElement>('[data-pad-action]')],
     padToggle: must<HTMLButtonElement>(root, '[data-pad-toggle]'),
     soundToggle: must<HTMLButtonElement>(root, '[data-sound-toggle]'),
     motionToggle: must<HTMLButtonElement>(root, '[data-motion-toggle]'),
@@ -749,6 +1084,7 @@ export function createShell(root: HTMLElement): Shell {
     pauseResume: must<HTMLButtonElement>(root, '[data-pause-resume]'),
     pauseRestart: must<HTMLButtonElement>(root, '[data-pause-restart]'),
     pauseHelp: must<HTMLButtonElement>(root, '[data-pause-help]'),
+    pauseSettings: must<HTMLButtonElement>(root, '[data-pause-settings]'),
     pauseClose: must<HTMLButtonElement>(root, '[data-pause-close]'),
     menuStats: must<HTMLElement>(root, '[data-menu-stats]'),
     statsReset: must<HTMLButtonElement>(root, '[data-stats-reset]'),
@@ -759,6 +1095,36 @@ export function createShell(root: HTMLElement): Shell {
     helpPanel: must<HTMLElement>(root, '[data-help-panel]'),
     helpClose: must<HTMLButtonElement>(root, '[data-help-close]'),
     helpDone: must<HTMLButtonElement>(root, '[data-help-done]'),
+    helpBody: must<HTMLElement>(root, '[data-help-body]'),
+    controlsList: must<HTMLElement>(root, '[data-controls-list]'),
+    settingsDialog: must<HTMLElement>(root, '[data-settings-dialog]'),
+    settings: {
+      dialog: must<HTMLElement>(root, '[data-settings-dialog]'),
+      panel: must<HTMLElement>(root, '[data-settings-panel]'),
+      close: must<HTMLButtonElement>(root, '[data-settings-close]'),
+      done: must<HTMLButtonElement>(root, '[data-settings-done]'),
+      message: must<HTMLElement>(root, '[data-settings-message]'),
+      soundInput: must<HTMLInputElement>(root, '[data-settings-sound]'),
+      motionInputs: [...root.querySelectorAll<HTMLInputElement>('[data-choice="motion"]')],
+      contrastInputs: [...root.querySelectorAll<HTMLInputElement>('[data-choice="contrast"]')],
+      padInputs: [...root.querySelectorAll<HTMLInputElement>('[data-choice="pad"]')],
+      handlingInputs: HANDLING_BOUNDS.map((bound) =>
+        must<HTMLInputElement>(root, `[data-handling="${bound.key}"]`),
+      ),
+      handlingValues: HANDLING_BOUNDS.map((bound) =>
+        must<HTMLElement>(root, `[data-handling-value="${bound.key}"]`),
+      ),
+      handlingReset: must<HTMLButtonElement>(root, '[data-handling-reset]'),
+      tryField: must<HTMLElement>(root, '[data-try-field]'),
+      tryBlock: must<HTMLElement>(root, '[data-try-block]'),
+      tryButtons: [...root.querySelectorAll<HTMLButtonElement>('[data-try-button]')],
+      keymap: must<HTMLElement>(root, '[data-keymap]'),
+      keysReset: must<HTMLButtonElement>(root, '[data-keys-reset]'),
+      resetAsk: must<HTMLButtonElement>(root, '[data-settings-reset]'),
+      resetConfirm: must<HTMLElement>(root, '[data-settings-confirm]'),
+      resetYes: must<HTMLButtonElement>(root, '[data-settings-erase]'),
+      resetNo: must<HTMLButtonElement>(root, '[data-settings-keep]'),
+    },
     // The live region is deliberately *not* here: an announcement must still
     // reach the player while a dialog has the rest of the page inert.
     background: [header, body, actions, replay, update, pad],

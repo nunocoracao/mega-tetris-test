@@ -36,9 +36,14 @@ browser.
   colours, a quad shakes the cabinet, the score counts up, a combo walks the
   clear cue up the scale, and every sound is synthesised from oscillators —
   there is not one media file in the repository.
-- **Remembers you.** Personal bests, totals, and four settings, in one
-  versioned `localStorage` key that is written on the assumption that storage
-  is hostile — plus your daily streak and the last thirty days of it.
+- **Yours to set up.** Every key is remappable, and DAS, ARR and the soft-drop
+  rate are sliders with a strip beside them that lets you feel the numbers.
+  Rebinding a key moves the help panel with it, because there is only one list.
+  See [Making it yours](#making-it-yours).
+- **Remembers you.** Personal bests, totals, your keys, your handling and every
+  preference, in one versioned `localStorage` key that is written on the
+  assumption that storage is hostile — plus your daily streak and the last
+  thirty days of it.
 - **Meant to be usable.** Full keyboard operation, real modal dialogs, a
   screen-reader description of the well, a high-contrast palette, per-piece
   shape marks so nothing depends on colour alone, and `prefers-reduced-motion`
@@ -349,6 +354,9 @@ agreeing with the palette.
 
 ### Keyboard
 
+**This table is the default, not the law.** Every row of it can be changed from
+**Settings** — see [Making it yours](#making-it-yours) below.
+
 | Keys           | Action         |
 | -------------- | -------------- |
 | `←` / `A`      | Move left      |
@@ -363,8 +371,9 @@ agreeing with the palette.
 | `?` / `H`      | Help           |
 
 Left, right and soft drop auto-repeat: 170 ms before the first repeat, then one
-every 40 ms sideways and every 35 ms down. `Enter` and `Space` both mean "play
-again" on the game-over panel, from wherever focus happens to be.
+every 40 ms sideways and every 35 ms down — all three adjustable. `Enter` and
+`Space` both mean "play again" on the game-over panel, from wherever focus
+happens to be.
 
 Keys pressed while a dialog is open belong to the dialog, so arrows scroll a
 long help panel rather than moving a piece nobody can see.
@@ -410,6 +419,101 @@ keyboard uses.
 
 The pad appears on touch-capable or narrow screens by default; **Touchpad** in
 the pause menu cycles auto → on → off.
+
+### Making it yours
+
+**Settings** opens from the footer, from the start screen, and from the pause
+menu ("Keys and handling…"). It is a dialog rather than a screen: the run
+behind it is exactly where you left it, so you can nudge a slider mid-game and
+carry on with the same piece still falling. `Escape` always closes it.
+
+#### Remapping a key
+
+Each action has a row: the keys it answers to, **Add key**, and **Default**.
+Press *Add key*, then press the key you want. Every key on a row has its own
+`×` that takes it off again.
+
+Four rules, each of them a sentence in the dialog when it bites — never a
+colour, and never a silent refusal:
+
+- **A key already in use is refused, not stolen.** "Space is already Hard drop.
+  Clear it there first, then try again." Taking a key off another row without
+  saying so is how a player ends up unable to drop and none the wiser; being
+  told costs one more click and never costs a binding.
+- **`Tab`, `Enter` and `Escape` cannot be captured**, nor can `Alt` or `Meta`,
+  nor any key with a modifier held down. They are how you move around the
+  dialog, press the button under focus, and get out — a capture that swallowed
+  them would be exactly the trap a remapper exists to prevent. (`Esc` keeps its
+  default place on *Pause / resume*, which is safe because a dialog claims the
+  key before the game ever sees it. You can clear it; you cannot move it.)
+- **`Pause / resume` and `Restart` must keep at least one key.** Without them
+  you could not reopen this dialog or deal a new game.
+- **At most three keys per action**, so a row stays a row.
+
+*Default* on a row restores that action's keys — taking them back off whatever
+had claimed them. **Reset every key** does the lot.
+
+#### Handling
+
+Three sliders, in milliseconds, with a strip beside them that moves a block on
+your own move keys at the settings you have chosen — the same repeat clock the
+game uses, so what you feel there is what the piece will do.
+
+| Setting               | Range        | Default |
+| --------------------- | ------------ | ------- |
+| Delay before repeat   | 0–500 ms     | 170 ms  |
+| Repeat rate (ARR)     | 0–100 ms     | 40 ms   |
+| Soft drop rate        | 5–200 ms     | 35 ms   |
+
+**ARR may be zero and soft drop may not**, which is a decision rather than an
+oversight. Instant sideways movement is a setting a real population of players
+wants and it is safe to give them: a piece that slides to the wall in one frame
+can be slid straight back. The same trick downwards is not reversible — a piece
+cannot come back up — so a zero there would be a hard drop with extra steps and
+would cost you placements you meant to make.
+
+Zero ARR is implemented as *eight steps per frame*, not a literal teleport.
+Eight is the same flood guard every other repeat obeys, and it crosses a
+ten-wide well in two frames — about 33 ms, which is below the threshold of
+noticing. The cap is what stops one long frame queueing hundreds of moves into
+the engine and the replay tape.
+
+#### Where the settings live
+
+The four quick toggles — Sound, Effects, Contrast, Touchpad — stay in the pause
+menu **as well as** appearing in the settings dialog in labelled groups. That
+is a deliberate duplication of *controls* and not of state: both write through
+the same accessor into the same field of `ui/storage.ts`, so they cannot
+disagree, and moving one changes the other. The reason to keep them is
+mid-run: "turn the sound off" should be one tap from the pause menu, not two
+dialogs deep.
+
+#### What is remembered, and what a reset does
+
+Bindings and handling are stored as data alongside the other settings and
+validated on the way in. A map with an unknown action, a key bound twice, a
+corrupt shape, or `Pause` left with no key at all falls back to *the whole
+default table* rather than being half-repaired — controls you recognise beat
+controls that are subtly wrong in a way nothing on the screen explains. The
+sliders are repaired field by field instead, because an out-of-range number has
+an obvious right answer.
+
+There are two resets and they do not overlap:
+
+- **Reset stats** (pause menu) erases every personal best, total and daily
+  result. It leaves your keys alone — a binding is not a score.
+- **Reset all settings** (settings dialog) puts keys, handling and every
+  preference back to the way the game shipped. It leaves your record book alone.
+
+#### Replays do not care what your keys are
+
+A replay records *inputs*, not keys, and the engine has never heard of DAS. A
+link shared eighteen months ago decodes and reproduces identically for somebody
+whose cabinet looks nothing like yours — `settings.test.ts` plays a checked-in
+link under a completely rearranged keyboard and a zeroed handling and compares
+the resulting board cell for cell. `REPLAY_FORMAT_VERSION` is untouched by any
+of this, and if it ever has to move for a *controls* change, something has gone
+into the engine that should not have.
 
 ## Scoring
 
@@ -472,9 +576,18 @@ asserted.
   single `:focus-visible` baseline rule so a control added later cannot arrive
   without a focus ring. There is no `outline: none` in the stylesheet and a
   test says so.
-- **Real dialogs.** The pause menu and the help panel trap focus, wrap `Tab` at
-  both ends, close on `Escape`, restore focus to whatever opened them, and mark
-  everything behind them `inert`.
+- **Real dialogs.** The pause menu, the help panel and the settings dialog trap
+  focus, wrap `Tab` at both ends, close on `Escape`, restore focus to whatever
+  opened them, and mark everything behind them `inert`. axe audits the page in
+  every state one of them can be in, the settings dialog's key capture
+  included.
+- **Rebinding is an accessibility feature.** One hand, a left hand, a laptop
+  with no numpad, a keyboard where `Z` is somewhere else — every action can be
+  moved, cleared and reset, and the capture is itself fully keyboard-operable
+  and announces what it took. Refusals are sentences in the panel *and* through
+  the live region, never a colour or a shake. `Tab`, `Enter` and `Escape` are
+  never capturable, so the dialog cannot become a trap. See
+  [Making it yours](#making-it-yours).
 - **Contrast.** Every text pair meets WCAG AA (4.5:1) and every control
   boundary meets 1.4.11 (3:1), in **both** palettes — computed from the real
   declarations in `style.css` by `src/ui/style.test.ts`, which fails the suite
@@ -505,14 +618,21 @@ dependencies:
 
 | File         | Raw      | Gzipped     |
 | ------------ | -------- | ----------- |
-| `index.js`   | 111.9 KB | **38.4 KB** |
-| `index.css`  | 24.8 KB  | **5.3 KB**  |
+| `index.js`   | 134.2 KB | **44.4 KB** |
+| `index.css`  | 28.4 KB  | **5.9 KB**  |
 | `index.html` | 2.5 KB   | **1.1 KB**  |
-| **Total**    | 139.2 KB | **44.8 KB** |
+| **Total**    | 165.1 KB | **51.4 KB** |
 
-JS + CSS is **43.7 KB gzipped**, against a budget of 100 KB. Replays and shared
-runs cost **+7.6 KB gzipped** of that, and it is worth saying where it went,
-because it is the largest single rise this project has had:
+JS + CSS is **50.3 KB gzipped**, against a budget of 100 KB. The settings
+dialog cost **+6.6 KB gzipped** of that (5.9 KB of JS, 0.6 KB of CSS) — the
+remapper's rules and copy, three sliders, the try-it strip, and about two
+hundred lines of markup. Rather more than a settings screen sounds like, and
+the reason is that most of it is *sentences*: every refusal the remapper can
+make is a written explanation rather than a red border, and there are a dozen
+of them.
+
+Replays and shared runs remain the largest single rise this project has had, at
+**+7.6 KB gzipped**, and it is worth saying where that went:
 
 | Module                             | Gzipped    |
 | ---------------------------------- | ---------- |
@@ -616,8 +736,9 @@ one job: `renderer.ts` paints a `GameState`, `palette.ts` reads every colour out
 of the stylesheet, `input.ts` and `touch.ts` report intents, `loop.ts` times
 frames, `shell.ts` builds the DOM, `hud.ts` writes the readouts, `dialog.ts` is
 the modal machinery, `storage.ts` is the only file that touches `localStorage`,
-`daily.ts` owns the streak arithmetic and the daily copy, and `stats.ts` is the
-only place a personal best is decided — including what
+`daily.ts` owns the streak arithmetic and the daily copy, `settings.ts` fills
+the settings dialog (the dialog *behaviour* is still `dialog.ts`'s), and
+`stats.ts` is the only place a personal best is decided — including what
 "best" even means in a mode raced on a clock. `hud.ts` is also
 the only place a clear gets a *name* — "T-spin double", "combo ×4" — which is
 why `effects.ts` imports it for its floating labels rather than writing its own.
@@ -628,10 +749,14 @@ key presses and gestures into engine inputs, and decides policy the engine
 deliberately leaves open — whether "pause" means pause or resume, whether a
 restart replays the seed or deals a new one, what a help panel even is.
 
-Three boundaries are enforced by tests rather than by review
+Four boundaries are enforced by tests rather than by review
 (`src/wiring.test.ts`): the UI imports the engine only through its barrel
-`src/engine/index.ts`, no file outside `ui/storage.ts` names `localStorage`, and
-no file outside `main.ts` reads the wall clock.
+`src/engine/index.ts`, no file outside `ui/storage.ts` names `localStorage`, no
+file outside `main.ts` reads the wall clock, and **no file outside
+`ui/input.ts` names a key**. That last one is what makes rebinding `Hard drop`
+change what the help panel says: the help list, the controls card beside the
+well and the on-screen pad's tooltips are three views of one binding table, and
+`applyBindings` republishes it into all three whenever it moves.
 
 ### One palette, in CSS
 
@@ -647,7 +772,7 @@ duplicate.
 
 ## Testing
 
-Around 990 tests, in about seven seconds.
+Around 1,100 tests, in about ten seconds.
 
 The engine carries a coverage floor because it is the part that must not rot.
 The browser layer does not, deliberately: the tests there cover the **pure**

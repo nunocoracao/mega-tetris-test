@@ -13,6 +13,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { defaultDaily, type DailyEntry } from './daily';
+import { DEFAULT_HANDLING, defaultKeyMap } from './input';
 import { defaultStats, emptyModeBests, type Best, type RunSummary, type Stats } from './stats';
 import {
   LEGACY_KEYS,
@@ -245,6 +246,8 @@ describe('round tripping', () => {
       startLevel: 6,
       mode: 'sprint',
       installDismissed: false,
+      bindings: defaultKeyMap(),
+      handling: DEFAULT_HANDLING,
     });
     expect(marathonBest(second.stats())).toEqual({
       score: 7777,
@@ -309,6 +312,8 @@ describe('migration', () => {
       startLevel: 1,
       mode: 'marathon',
       installDismissed: false,
+      bindings: defaultKeyMap(),
+      handling: DEFAULT_HANDLING,
     });
     expect(migrated.stats).toEqual(defaultStats());
   });
@@ -351,6 +356,8 @@ describe('migration', () => {
       startLevel: 4,
       mode: 'marathon',
       installDismissed: false,
+      bindings: defaultKeyMap(),
+      handling: DEFAULT_HANDLING,
     });
   });
 
@@ -500,6 +507,8 @@ describe('the loose keys of the ad-hoc era', () => {
       startLevel: 1,
       mode: 'marathon',
       installDismissed: false,
+      bindings: defaultKeyMap(),
+      handling: DEFAULT_HANDLING,
     });
     for (const key of Object.values(LEGACY_KEYS)) {
       expect(area.map.has(key), `${key} was left behind`).toBe(false);

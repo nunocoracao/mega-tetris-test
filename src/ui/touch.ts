@@ -22,7 +22,7 @@
  */
 
 import { BOARD_HEIGHT, BOARD_WIDTH, type GameInput } from '../engine';
-import { createAutoRepeat, type ActionId } from './input';
+import { actionLabel, createAutoRepeat, type ActionId, type Handling } from './input';
 import type { SettingAccess } from './storage';
 
 // ---------------------------------------------------------------------------
@@ -411,7 +411,12 @@ export function createGestureRecognizer(initial: GestureSurface): GestureRecogni
 
 export interface PadButton {
   readonly action: TouchAction;
-  /** The button's accessible name. */
+  /**
+   * The button's accessible name — read out of `ui/input.ts`, never retyped.
+   * These are the same seven actions the keyboard has names for, and two files
+   * calling the same button different things is exactly the drift the binding
+   * table exists to prevent.
+   */
   readonly label: string;
   /** The cap's face. Decorative — `label` is what a screen reader says. */
   readonly glyph: string;
@@ -419,19 +424,25 @@ export interface PadButton {
   readonly slot: string;
 }
 
+/** Everything about a pad button except its name, which the bindings own. */
+const PAD_LAYOUT: readonly { action: TouchAction; glyph: string; slot: string }[] = [
+  { action: 'hold', glyph: '⇄', slot: 'hold' },
+  { action: 'rotateCCW', glyph: '↺', slot: 'ccw' },
+  { action: 'rotateCW', glyph: '↻', slot: 'cw' },
+  { action: 'hardDrop', glyph: '⇓', slot: 'hard' },
+  { action: 'moveLeft', glyph: '◀', slot: 'left' },
+  { action: 'softDrop', glyph: '▼', slot: 'soft' },
+  { action: 'moveRight', glyph: '▶', slot: 'right' },
+];
+
 /**
  * The pad, top row then bottom row. `shell.ts` builds the markup from this
  * table and `createTouchControls` wires it, so adding a button is one edit.
  */
-export const TOUCH_PAD_BUTTONS: readonly PadButton[] = [
-  { action: 'hold', label: 'Hold piece', glyph: '⇄', slot: 'hold' },
-  { action: 'rotateCCW', label: 'Rotate left', glyph: '↺', slot: 'ccw' },
-  { action: 'rotateCW', label: 'Rotate right', glyph: '↻', slot: 'cw' },
-  { action: 'hardDrop', label: 'Hard drop', glyph: '⇓', slot: 'hard' },
-  { action: 'moveLeft', label: 'Move left', glyph: '◀', slot: 'left' },
-  { action: 'softDrop', label: 'Soft drop', glyph: '▼', slot: 'soft' },
-  { action: 'moveRight', label: 'Move right', glyph: '▶', slot: 'right' },
-];
+export const TOUCH_PAD_BUTTONS: readonly PadButton[] = PAD_LAYOUT.map((button) => ({
+  ...button,
+  label: actionLabel(button.action),
+}));
 
 // ---------------------------------------------------------------------------
 // The pad visibility preference (pure helpers + storage)
@@ -544,6 +555,11 @@ export interface TouchControlsOptions {
   readonly onPreferenceChange?: (preference: PadPreference, visible: boolean) => void;
   /** Where the pad's visibility is kept between visits; see `ui/motion.ts`. */
   readonly storage?: SettingAccess<PadPreference>;
+  /**
+   * The repeat timing in force, read per frame. A held ◀ has to feel exactly
+   * like a held arrow key, which means feeling the same slider.
+   */
+  readonly handling?: () => Handling;
 }
 
 export interface TouchControls {
@@ -552,6 +568,8 @@ export interface TouchControls {
   /** Forget every held button and any gesture in flight. */
   releaseAll(): void;
   preference(): PadPreference;
+  /** Set it outright, as the settings dialog's radio group does. */
+  setPreference(preference: PadPreference): void;
   padVisible(): boolean;
   /** True when this looks like a touch device, whatever the pad setting says. */
   touchLikely(): boolean;
@@ -596,7 +614,10 @@ export function createTouchControls(options: TouchControlsOptions): TouchControl
   const recognizer = createGestureRecognizer(measureSurface());
   // The pad borrows the keyboard's repeat clock rather than owning a second
   // one, which is what makes a held ◀ feel exactly like a held arrow key.
-  const repeat = createAutoRepeat((action) => options.onAction(action as TouchAction));
+  const repeat = createAutoRepeat(
+    (action) => options.onAction(action as TouchAction),
+    options.handling,
+  );
 
   const touchQuery = typeof matchMedia === 'function' ? matchMedia(TOUCH_LIKELY_QUERY) : null;
   let preference = parsePadPreference(options.storage?.read());
@@ -781,11 +802,15 @@ export function createTouchControls(options: TouchControlsOptions): TouchControl
     }
   }
 
-  function onToggleClick(): void {
-    preference = nextPadPreference(preference);
+  function setPreference(next: PadPreference): void {
+    preference = next;
     options.storage?.write(preference);
     applyPreference();
     options.onPreferenceChange?.(preference, padVisible());
+  }
+
+  function onToggleClick(): void {
+    setPreference(nextPadPreference(preference));
   }
 
   function onQueryChange(): void {
@@ -822,6 +847,7 @@ export function createTouchControls(options: TouchControlsOptions): TouchControl
       }
     },
     preference: () => preference,
+    setPreference,
     padVisible,
     touchLikely,
     destroy(): void {

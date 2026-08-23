@@ -233,6 +233,48 @@ describe('the calendar boundary', () => {
   });
 });
 
+describe('the bindings boundary', () => {
+  /**
+   * **`ui/input.ts` is the only file that names a key.**
+   *
+   * The help panel, the controls card, the on-screen pad and the settings
+   * dialog all show the player their keys, and every one of them is a view of
+   * the one binding table rather than a copy of it. A second list is how a
+   * rebound key ends up changing the game and not the help — which is worse
+   * than no help panel at all.
+   *
+   * This scans for the key names themselves. `KEY_BINDINGS` and the small
+   * vocabulary of keys the dialogs own (`Escape`, `Tab`, `Enter`) are the
+   * exceptions, and they are named where they are enforced.
+   */
+  const KEY_LITERALS = /'(?:Arrow(?:Left|Right|Up|Down)|Shift|Control)'/;
+
+  const others = sources(SRC_DIR).filter((name) => name !== 'ui/input.ts');
+
+  it.each(others)('%s does not restate the key list', (name) => {
+    const code = stripComments(readFileSync(join(SRC_DIR, name), 'utf8'));
+    const found = [...code.matchAll(new RegExp(KEY_LITERALS, 'g'))].map((match) => match[0]);
+    expect(found, `${name} names keys the binding table already owns`).toEqual([]);
+  });
+
+  it('keeps the pad and the help panel reading the live table', () => {
+    // Both used to hold their own labels. `applyBindings` is the one call that
+    // republishes the table into every place that prints it.
+    const shell = stripComments(readFileSync(join(SRC_DIR, 'ui/shell.ts'), 'utf8'));
+    expect(shell).toContain('export function applyBindings(');
+    expect(shell).toContain('helpBodyMarkup(bindings)');
+    expect(MAIN).toContain('bindings.listen(() => applyBindings(shell, bindings.table()))');
+  });
+
+  it('hands the bindings and the handling into the input layer', () => {
+    // The whole point of the remapper: nothing reaches for a module constant.
+    const code = stripComments(MAIN);
+    expect(code).toContain('createLiveBindings(');
+    expect(/createKeyboardInput\(\{[^}]*bindings:/s.test(code)).toBe(true);
+    expect(/createKeyboardInput\(\{[^}]*handling:/s.test(code)).toBe(true);
+  });
+});
+
 describe('the storage boundary', () => {
   // `ui/storage.ts` is the only file allowed to touch `localStorage`, which is
   // what keeps the "storage may be hostile" handling — and the stored format —

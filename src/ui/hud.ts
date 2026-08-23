@@ -994,7 +994,8 @@ export function createHud(shell: Shell): Hud {
     }
 
     setHidden(shell.overlayStart, !content.showLevelSelect);
-    setHidden(shell.overlayHelp, !content.showHelp);
+    // The pair of quiet buttons under the primary one — help, and settings.
+    setHidden(shell.overlayMinor, !content.showHelp);
     setHidden(shell.overlayActions, !content.showReplay);
     // The block's *contents* are written by `main.ts` when the record changes,
     // not per frame; all the overlay decides is whether it is on screen.
