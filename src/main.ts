@@ -334,6 +334,9 @@ const touch = createTouchControls({
   boardCanvas: shell.boardCanvas,
   pad: shell.touchPad,
   padToggle: shell.padToggle,
+  // The one setting `touch.ts` owns. Without this it cycles happily and forgets
+  // the answer on reload, which is the worst of both.
+  storage: store.access('pad'),
   onAction: dispatch,
   onPreferenceChange(preference, visible) {
     hud.announce(

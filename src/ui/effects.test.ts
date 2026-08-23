@@ -46,7 +46,7 @@ function stubContext(): CanvasRenderingContext2D & { readonly calls: string[] } 
     fillText: record('fillText'),
     strokeText: record('strokeText'),
     createLinearGradient: (): CanvasGradient =>
-      ({ addColorStop: (): void => {} }) as unknown as CanvasGradient,
+      ({ addColorStop: (): void => {} }),
   };
 
   return stub as unknown as CanvasRenderingContext2D & { readonly calls: string[] };

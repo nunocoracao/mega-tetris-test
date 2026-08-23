@@ -1,75 +1,222 @@
 # Mega Tetris
 
-A cheerful, fast-loading falling-block puzzle game that lives entirely in the
-browser — a tiny arcade cabinet at a URL. No backend, no accounts, no build
-server: just static files.
+A cheerful falling-block puzzle game that lives entirely in the browser — a
+tiny arcade cabinet at a URL. No backend, no accounts, no install: three static
+files totalling **28 KB gzipped**, and you are playing.
 
-The game is playable: `npm run dev`, then press Play and use the arrow keys — or
-open it on a phone and drag, tap and flick. It remembers your settings and your
-personal bests between visits, and nothing ever leaves the browser.
+**▶ [Play it](https://nunocoracao.github.io/mega-tetris-test/)**
 
-## Tech
+Arrow keys on a desktop; drag, tap and flick on a phone. It remembers your
+settings and your personal bests between visits, and nothing ever leaves your
+browser.
 
-- [Vite](https://vite.dev) 7 for dev server and static builds
-- [TypeScript](https://www.typescriptlang.org) 5 in `strict` mode
-- [Vitest](https://vitest.dev) 3 for unit tests
-- [axe-core](https://github.com/dequelabs/axe-core) and jsdom for the
-  accessibility audit — test-time only
+## What is in it
 
-Zero runtime dependencies — the game is plain TypeScript and CSS.
-
-## Prerequisites
-
-- Node.js 20 or newer
-- npm 10 or newer (ships with Node 20+)
+- **The whole genre, done properly.** Seven pieces from a shuffled bag, wall
+  kicks, a ghost showing where the piece will land, soft and hard drop, hold, a
+  five-deep preview, lock delay with a reset cap, levels that speed up, and a
+  seeded piece stream that makes every run reproducible.
+- **Plays with a thumb.** Gestures over the well *and* a seven-button on-screen
+  pad, both producing exactly the actions the keyboard does.
+- **Feels like something.** Line clears flash and throw shards in their own
+  colours, a quad shakes the cabinet, the score counts up, and every sound is
+  synthesised from oscillators — there is not one media file in the repository.
+- **Remembers you.** Personal bests, totals, and four settings, in one
+  versioned `localStorage` key that is written on the assumption that storage
+  is hostile.
+- **Meant to be usable.** Full keyboard operation, real modal dialogs, a
+  screen-reader description of the well, a high-contrast palette, per-piece
+  shape marks so nothing depends on colour alone, and `prefers-reduced-motion`
+  honoured live.
+- **Starts instantly.** No web fonts, no images, no runtime dependencies, no
+  network request after the first three.
 
 ## Getting started
 
+Node.js 20 or newer, and the npm that ships with it.
+
 ```bash
-npm install     # install dev dependencies
-npm run dev     # start the dev server at http://localhost:5173
+npm install     # dev dependencies only — the game itself has none
+npm run dev     # http://localhost:5173
 ```
 
 ## Commands
 
-| Command              | What it does                                            |
-| -------------------- | ------------------------------------------------------- |
-| `npm run dev`        | Start the Vite dev server with hot module replacement.   |
-| `npm run build`      | Typecheck, then build the static bundle into `dist/`.    |
-| `npm run preview`    | Serve the built `dist/` bundle locally.                  |
-| `npm test`           | Run the test suite once.                                 |
-| `npm run test:watch` | Run tests in watch mode.                                 |
-| `npm run typecheck`  | Typecheck without emitting output.                       |
-| `npm run a11y`       | Run the accessibility audit (axe-core) and contrast check. |
+| Command              | What it does                                              |
+| -------------------- | --------------------------------------------------------- |
+| `npm run dev`        | Vite dev server with hot module replacement.               |
+| `npm run build`      | Typecheck, then build the static bundle into `dist/`.      |
+| `npm run preview`    | Serve the built `dist/` locally, as a static host would.   |
+| `npm test`           | The whole suite, once. Takes about three seconds.          |
+| `npm run test:watch` | The suite, in watch mode.                                  |
+| `npm run coverage`   | The suite plus a coverage report (`coverage/index.html`).  |
+| `npm run typecheck`  | `tsc --noEmit`, in `strict` mode.                          |
+| `npm run lint`       | ESLint, with type-aware TypeScript rules.                  |
+| `npm run a11y`       | The axe-core audit and the contrast check on their own.    |
 
-The build uses a relative `base`, so the contents of `dist/` can be dropped on
-any static host or subdirectory and will work as-is.
+`npm run coverage` enforces a floor on `src/engine/**` — 90% statements, 85%
+branches — and fails the command if an edit drops below it. It currently sits
+at **98% statements, 96% branches, 100% functions**. The browser layer is
+reported but not gated; see [Testing](#testing) for why.
 
-## Project layout
+`vite.config.ts` sets `base: './'`, so the contents of `dist/` work from any
+static host and from any subdirectory path.
+
+## Controls
+
+### Keyboard
+
+| Keys           | Action         |
+| -------------- | -------------- |
+| `←` / `A`      | Move left      |
+| `→` / `D`      | Move right     |
+| `↓` / `S`      | Soft drop      |
+| `Space`        | Hard drop      |
+| `↑` / `X`      | Rotate right   |
+| `Z` / `Ctrl`   | Rotate left    |
+| `C` / `Shift`  | Hold piece     |
+| `P` / `Esc`    | Pause / resume |
+| `R`            | Restart        |
+| `?` / `H`      | Help           |
+
+Left, right and soft drop auto-repeat: 170 ms before the first repeat, then one
+every 40 ms sideways and every 35 ms down. `Enter` and `Space` both mean "play
+again" on the game-over panel, from wherever focus happens to be.
+
+Keys pressed while a dialog is open belong to the dialog, so arrows scroll a
+long help panel rather than moving a piece nobody can see.
+
+### Touch — gestures over the well
+
+| Gesture                           | Action                            |
+| --------------------------------- | --------------------------------- |
+| Drag sideways                     | One column per step, continuously |
+| Drag down                         | Soft drop, one row per step       |
+| Fast flick down                   | Hard drop                         |
+| Tap                               | Rotate right                      |
+| Tap in the left fifth of the well | Rotate left                       |
+| Two-finger tap                    | Rotate left                       |
+| Swipe up                          | Hold                              |
+
+Every threshold is a multiple of the *rendered cell size* rather than a pixel
+count, so a gesture feels the same on a 320 px phone and on a tablet. A flick
+must cross 2.2 cells **and** still be moving at 0.045 cells/ms to count as a
+slam, measured over the last 70 ms — which is what keeps a deliberate drag to
+the floor from reading as a hard drop.
+
+### Touch — the on-screen pad
+
+Seven real buttons with accessible names and 44 px minimum targets: hold,
+rotate left, rotate right, hard drop, move left, soft drop, move right. Left,
+right and soft drop auto-repeat while held, driven by the same clock the
+keyboard uses.
+
+The pad appears on touch-capable or narrow screens by default; **Touchpad** in
+the pause menu cycles auto → on → off.
+
+## Scoring
+
+| Event                | Points                     |
+| -------------------- | -------------------------- |
+| Single (1 line)      | 100 × level                |
+| Double (2 lines)     | 300 × level                |
+| Triple (3 lines)     | 500 × level                |
+| Quad (4 lines)       | 800 × level                |
+| Soft drop            | 1 per row                  |
+| Hard drop            | 2 per row                  |
+
+| Rule       | Behaviour                                                            |
+| ---------- | -------------------------------------------------------------------- |
+| Gravity    | `800ms × 0.85^(level−1)` per row, floored at `50ms` from level 18 on. |
+| Levels     | One level per 10 lines cleared.                                       |
+| Lock delay | `500ms` once resting, refreshed by a move or rotation, 15 times max.  |
+| Hold       | Swaps the active piece and resets it to spawn; locked until the next piece commits. |
+| Game over  | A newly spawned piece has nowhere to sit.                             |
+
+The help panel builds both of these tables from the engine's own constants, so
+retuning a score changes the help text with it.
+
+Starting above level 1 is a **head start**: faster gravity, but ten levels of
+easy scoring skipped. Those runs keep their own personal bests and stay out of
+the headline high score. Totals — games played, lines all-time — count
+everything, because they record time spent rather than skill.
+
+## Accessibility
+
+Everything here is checked by `npm run a11y` or by a unit test, not merely
+asserted.
+
+- **Structure.** `<header>` with the one `<h1>`, `<main>` around the well,
+  `<footer>` for the actions; headings that only ever step down one level; a
+  real `<button>` with an accessible name behind every control.
+- **The well, in words.** The playfield canvas is `role="img"`, labelled by a
+  visually hidden paragraph the HUD keeps current: *"Playfield, 10 columns
+  wide. The stack is 6 rows high, of 20. Score 1,200, level 2, 14 lines
+  cleared. Falling piece: T. Next: I, then O, then S. Holding L."* It says
+  nothing about *where* the falling piece is — a description that changed on
+  every gravity tick would be unusable.
+- **A high bar for announcements.** One polite live region, and only line
+  clears, level ups, pause and resume, game over with the final score, and
+  setting changes reach it. Locks, spawns, holds and moves are silent.
+- **Keyboard.** Full operability, no traps, no positive `tabindex`, and a
+  single `:focus-visible` baseline rule so a control added later cannot arrive
+  without a focus ring. There is no `outline: none` in the stylesheet and a
+  test says so.
+- **Real dialogs.** The pause menu and the help panel trap focus, wrap `Tab` at
+  both ends, close on `Escape`, restore focus to whatever opened them, and mark
+  everything behind them `inert`.
+- **Contrast.** Every text pair meets WCAG AA (4.5:1) and every control
+  boundary meets 1.4.11 (3:1), in **both** palettes — computed from the real
+  declarations in `style.css` by `src/ui/style.test.ts`, which fails the suite
+  if an edit drops one below the bar.
+- **Not just colour.** Each piece kind carries a mark stamped into its blocks —
+  a bar for I, a ring for O, a plus for T, mirrored diagonals for S and Z, a
+  pillar for J, a double bar for L — at 7:1 or better against its own face.
+- **Reduced motion.** `prefers-reduced-motion` is read through `matchMedia`, so
+  changing it in system settings takes effect without a reload. With motion off
+  there are no particles, no shake and no count-up; the information all stays,
+  only the movement goes. The **Effects** setting overrides it in both
+  directions.
+- **Nothing destructive without a second answer.** Erasing your personal bests
+  takes two differently-worded controls, and focus lands on the safe one.
+
+## Bundle size
+
+The production build is three files and no runtime dependencies:
+
+| File         | Raw     | Gzipped     |
+| ------------ | ------- | ----------- |
+| `index.js`   | 69.5 KB | **23.8 KB** |
+| `index.css`  | 18.5 KB | **4.2 KB**  |
+| `index.html` | 1.4 KB  | **0.7 KB**  |
+| **Total**    | 89.5 KB | **28.8 KB** |
+
+JS + CSS is **28.0 KB gzipped**, against a budget of 100 KB. There is nothing
+else to fetch: the favicon is an inline SVG data URI, there are no web fonts,
+no images and no audio files. Re-measure with `npm run build` — Vite prints the
+gzipped figure for every asset.
+
+## Architecture
 
 ```
 .
-├── index.html        # Vite entry point and document shell
+├── index.html          # Document shell and Vite entry point
 ├── src/
-│   ├── engine/       # Game rules: board, pieces, seeded bag, state machine
-│   ├── ui/           # Browser layer: canvas renderer, input, loop, HUD, shell
-│   │                 #   plus stats.ts (records) and storage.ts (persistence)
-│   ├── main.ts       # Composition root — wires the engine to the browser
-│   ├── style.css     # Visual identity: the `:root` palette and the layout
-│   └── *.test.ts     # Unit tests, colocated with the code they cover
-├── tsconfig.json     # Strict TypeScript config (noEmit — Vite handles emit)
-└── vite.config.ts    # Vite + Vitest configuration
+│   ├── engine/         # The game. Pure, deterministic, DOM-free.
+│   ├── ui/             # The browser layer: canvas, input, DOM, storage.
+│   ├── main.ts         # Composition root — the one place they meet
+│   ├── style.css       # The palette and the layout, in one `:root` block
+│   └── *.test.ts       # Tests, colocated with the code they cover
+├── eslint.config.js
+├── tsconfig.json       # strict, plus `noUncheckedIndexedAccess`
+└── vite.config.ts      # Vite + Vitest + coverage thresholds
 ```
 
-Game logic is kept separate from rendering so board and scoring rules can be
-tested without a DOM. Nothing in `src/ui/` knows a game rule, and nothing in
-`src/engine/` knows the browser exists.
+### The engine is a pure state machine
 
-## Game engine
-
-`src/engine/` is the whole game as a pure state machine — no DOM, no clock, no
-unseeded randomness (`purity.test.ts` enforces that). Three functions drive it,
-each returning a new immutable snapshot:
+`src/engine/` is the whole game as data and three functions. There is no DOM,
+no clock, no `Math.random`: the only source of randomness is a seeded bag
+carried *inside* the state itself.
 
 ```ts
 import { applyInput, createGame, update } from './engine';
@@ -80,385 +227,152 @@ state = update(state, 16.7);                     // one frame of gravity
 state = applyInput(state, { type: 'hardDrop' });
 ```
 
-Every snapshot carries `events` — `spawn`, `lock`, `hardDrop`, `rowsCleared`,
+Every call returns a brand-new immutable snapshot and never touches its input.
+That makes the game a pure function of `(seed, ordered list of calls)`: the same
+seed and the same script always produce a deeply equal result, which is what
+lets the tests assert real behaviour instead of poking at internals.
+
+`update` consumes its delta in slices bounded by the next deadline — the next
+gravity step, the end of the lock delay, the end of a line-clear pause — so one
+long frame produces exactly the same sequence of events as the many short
+frames it stands in for. `src/engine/purity.test.ts` scans every engine source
+file for `Math.random`, `Date.now`, `performance.now`, DOM globals and
+`import.meta.env`, so adding an engine file adds a check.
+
+### Events drive the effects, and nothing flows back
+
+Each snapshot carries `events` — `spawn`, `lock`, `hardDrop`, `rowsCleared`,
 `levelUp`, `hold`, `gameOver` — describing only what happened during the call
-that produced it, so the UI can animate and play sound without inspecting
-engine internals.
-
-Because the piece stream lives in the snapshot as seeded data, the same seed
-plus the same ordered calls always yields a deeply equal result.
-
-### Rules
-
-| Rule           | Behaviour                                                          |
-| -------------- | ------------------------------------------------------------------ |
-| Gravity        | `800ms × 0.85^(level−1)` per row, floored at `50ms` (level 18 on).   |
-| Lock delay     | `500ms` once resting, refreshed by a move or rotation, 15 times max. |
-| Soft drop      | One row down, 1 point per row.                                       |
-| Hard drop      | Straight to the landing spot, locks at once, 2 points per row.        |
-| Line clears    | 1/2/3/4 lines score 100/300/500/800, multiplied by the current level. |
-| Levels         | One level per 10 cleared lines.                                       |
-| Hold           | Swaps the active piece, resets it to spawn, locked until the next lock. |
-| Game over      | A newly spawned piece has nowhere to sit.                             |
-
-## Browser layer
-
-`src/ui/` turns the state machine into a game you can play. Each module does one
-job and holds no rules of its own:
-
-| Module        | Responsibility                                                        |
-| ------------- | --------------------------------------------------------------------- |
-| `renderer.ts` | Paints a `GameState` onto a canvas: well, stack, ghost, active piece.  |
-| `palette.ts`  | Reads the CSS custom properties and derives each block's shading.      |
-| `input.ts`    | Keyboard bindings, and the auto-repeat clock every held control shares. |
-| `touch.ts`    | Gesture recogniser, on-screen pad, pad setting, haptics.               |
-| `loop.ts`     | `requestAnimationFrame` timing, delta clamping, pause when hidden.     |
-| `shell.ts`    | Builds the DOM: canvases, readouts, overlay, buttons, live region.     |
-| `hud.ts`      | Score/level/lines, overlay copy, screen-reader announcements.          |
-| `effects.ts`  | Flashes, shards, dust, popups and shake, driven by engine events.      |
-| `audio.ts`    | Synthesised cues — oscillators and envelopes, no audio files.          |
-| `motion.ts`   | How much movement the player wants: the OS preference and the toggle.  |
-| `contrast.ts` | How much contrast the player wants, and the per-piece marks.            |
-| `dialog.ts`   | Modal behaviour: focus trap, Escape, focus restoration, `inert`.        |
-| `help.ts`     | The help panel's content, generated from the bindings and the rules.    |
-| `countdown.ts`| The three, two, one between closing the pause menu and playing again.   |
-
-Canvases are sized to their CSS box times `devicePixelRatio` and redrawn from a
-`ResizeObserver`, so the grid stays crisp on any display. The two rows above the
-playfield are the spawn area: a new piece is drawn there faintly, so it is
-visible from the moment it appears rather than a second later.
-
-Frame deltas are clamped to 100 ms and the loop suspends while the tab is
-hidden, so coming back to a backgrounded game never costs a burst of dropped
-rows — the game simply pauses.
-
-## Look and layout
-
-Every colour is declared once, as a custom property in the single `:root` block
-of `src/style.css`. The canvas does not keep a second copy: `ui/palette.ts`
-reads those properties out of the computed style at startup, and again whenever
-a colour preference changes, so restyling the game — including the seven block
-faces — is a matter of editing CSS. Each block's lit bevel and shaded edge are
-derived from its face colour and drawn programmatically; there are no image
-assets anywhere in the project, and the favicon is an inline SVG data URI.
-
-The playfield is sized by one rule rather than a table of breakpoints: it takes
-the smallest of the height the layout can spare, a ceiling for large screens,
-and the height implied by the width left over once the rails are paid for. A
-single rem-based media query moves the rails from beside the well to above and
-below it. The page itself never scrolls — the field shrinks instead.
-
-Verified at 320x568, 375x812, 768x1024, 1440x900 and 800x400: no horizontal
-overflow, no page scrolling, and the whole 22-row field visible in every case.
-
-## Feel: effects and sound
-
-The engine says *what* happened; `src/ui/effects.ts` and `src/ui/audio.ts`
-decide how it feels. Nothing flows back the other way, so the rules stay
-deterministic and every celebration is disposable.
-
-| Event      | What you see                                                          | What you hear                     |
-| ---------- | --------------------------------------------------------------------- | --------------------------------- |
-| Line clear | Cleared rows flash white and shrink; shards fly in their block colours. | A chord, higher for more rows.    |
-| Quad       | Twice the shards, a brighter flash, a few pixels of screen shake, a `QUAD` label. | The same chord, up a fifth and a note fuller. |
-| Back to back | A harder shake and a `BACK TO BACK` label.                           | —                                 |
-| Hard drop  | A streak down the piece's columns, dust at the landing row, the locked cells squash. | A whoosh into a thud.    |
-| Level up   | The well's lip lights up and the new level reads across the field, gone in under a second. | Three notes up a major triad. |
-| Game over  | The stack greys out row by row from the floor, then the panel fades in. | Three notes down.                |
-| Score      | A `+800` label rises out of the clear; the HUD score counts up to it.  | —                                 |
-
-Every sound is synthesised on the spot from oscillators and gain envelopes —
-there is not one audio file in the repository. The musical decisions live in
-`cueTones`, a pure function from cue to a list of tones, which is why "a quad is
-a fifth above a single" is a unit test rather than a matter of opinion. The
-`AudioContext` is not created until the player's first tap or keypress (browsers
-block it before that) and a suspended context is nudged rather than assumed. The
-**Sound** button mutes it; the choice is remembered in `localStorage` under
-`mega-tetris:muted`.
-
-Effects are measured in cells, not pixels, so a burst looks the same on a phone
-and a desktop, and every particle, label and flash comes from a fixed-size pool
-built once — a quad clear allocates nothing per frame. The pool caps at 168
-shards; a burst that would overflow it thins out rather than growing.
-
-Measured in Chromium at 1280x900: a real in-game back-to-back quad peaked at 164
-live shards across 89 sampled frames with a median frame of **16.7 ms**, a worst
-frame of **16.8 ms** and nothing over 20 ms — a locked 60fps. Rendered on its own
-against a 300x660 canvas, the whole effects layer costs **0.2 ms median, 0.3 ms
-p95** per frame while a quad is in flight.
-
-### Reduced motion
-
-`prefers-reduced-motion: reduce` is honoured, read through `matchMedia` so
-flipping it in system settings takes effect without a reload. With motion off
-there are no particles, no shake, no rise on the score labels and no count-up;
-the cleared rows get a held, static highlight instead, the game-over grey lands
-in one step and the panel appears without a fade. The information is all still
-there — only the movement goes.
-
-The **Effects** button overrides it in both directions (auto → full → reduced),
-because plenty of people want calm effects in one game and not across their whole
-machine. It persists under `mega-tetris:motion`, and the decision is published to
-the stylesheet as `data-motion` on the root element so the CSS transitions follow
-exactly the same rule the canvas does.
-
-## The loop: start screen, bests and one more game
-
-The cabinet has an attract mode. Before the first game you land on a start
-screen inside the well — the game's name, a one-line pitch, a **Play** button, a
-link to the help panel, your personal best if you have one, and a **start level**
-picker for 1 to 10. Behind the panel, seven piece silhouettes drift slowly
-upward and tumble; under reduced motion they simply are not there.
-
-When a run ends, the panel leads with **Play again**, already focused. `Enter`,
-`Space` or `R` restart from anywhere, and a restart is instant — a new snapshot
-and a repaint, no reload and nothing to rebuild. Under the heading is the run in
-one line ("12 lines, level 3, 4,200 points") and then four rows putting the run
-beside your best: score, lines, level and time. Rows you pushed past light up,
-and a new high score is called out above the title and in the live region.
-
-### What is remembered, and how
-
-| Stat                | Counts                                    |
-| ------------------- | ----------------------------------------- |
-| High score          | Best score from a run started on level 1  |
-| Highest level       | Furthest level reached, likewise          |
-| Most lines in a run | Best single run, likewise                 |
-| Best head start     | Best score from a run started above 1     |
-| Games played        | Every run that reached a game over        |
-| Lines all-time      | Every line ever cleared                   |
-
-Starting above level 1 is a head start — faster gravity, but ten levels of easy
-scoring skipped — so those runs keep their **own** bests and stay out of the
-headline number. The totals count every run, because those are a record of time
-spent rather than of skill. `src/ui/stats.ts` holds all of that as pure
-functions; `applyRun(stats, run)` is the single place a record is decided, and
-`src/ui/stats.test.ts` argues the edge cases (a tie is not a record, a run that
-scored nothing broke nothing, a head start is measured against head starts).
-
-### Storage
-
-One namespaced key, `mega-tetris:store`, holding one versioned object:
-
-```json
-{ "version": 2, "settings": { … }, "stats": { … } }
-```
-
-`src/ui/storage.ts` is the only file in the project that touches
-`localStorage`, and it is written on the assumption that storage is hostile.
-Safari's private mode throws from `getItem`; an enterprise policy can switch
-storage off entirely; a full quota throws on write; and the value itself may be
-truncated JSON, an array, or an object with the right keys and the wrong types.
-Every call is wrapped and every parsed value is validated, so the worst case is
-"this player gets the defaults" and never a broken game. Whatever it makes sense
-of is written straight back, so a corrupt entry is corrupt exactly once.
-
-`SCHEMA_VERSION` is a real hinge, not a decoration: `MIGRATIONS` carries one
-entry per step, and version 1 is the settings-only, loose-key era this game
-actually shipped with. Those five old keys are read once, folded into the store
-and deleted. Data from a *newer* version than the running build is salvaged
-rather than discarded — someone's high score is not ours to throw away.
-
-The modules that used to keep a key each — `motion.ts`, `contrast.ts`,
-`touch.ts`, `audio.ts` — now take a typed `SettingAccess<T>` from `main.ts`
-instead. The dependency arrows all point into `storage.ts`, which is what keeps
-the format in one testable file.
-
-## Controls
-
-| Keys        | Action                |
-| ----------- | --------------------- |
-| `←` / `A`   | Move left             |
-| `→` / `D`   | Move right            |
-| `↓` / `S`   | Soft drop             |
-| `Space`     | Hard drop             |
-| `↑` / `X`   | Rotate right          |
-| `Z` / `Ctrl`| Rotate left           |
-| `C` / `Shift`| Hold piece           |
-| `P` / `Esc` | Pause / resume        |
-| `R`         | Restart               |
-| `?` / `H`   | Help                  |
-
-Left and right auto-repeat after a 170 ms delay, then every 40 ms. The bindings
-live in `KEY_BINDINGS` in `src/ui/input.ts` and both the on-screen controls list
-and the help panel are generated from that table, so they cannot drift apart.
-
-Keys pressed while a dialog is open belong to the dialog, so arrows scroll a long
-help panel instead of moving a piece nobody can see.
-
-## Touch
-
-The game is fully playable with a thumb. There are two ways to play, and both
-produce exactly the same actions the keyboard does — `src/main.ts` has one
-`dispatch`, and gestures, buttons and keys all arrive there.
-
-### Gestures, over the well
-
-| Gesture                            | Action                     |
-| ---------------------------------- | -------------------------- |
-| Drag sideways                      | One column per step, continuously |
-| Drag down                          | Soft drop, one row per step |
-| Fast flick down                    | Hard drop                  |
-| Tap                                | Rotate right               |
-| Tap in the left fifth of the well  | Rotate left                |
-| Two-finger tap                     | Rotate left                |
-| Swipe up                           | Hold                       |
-
-Every threshold is a multiple of the **rendered cell size** rather than a pixel
-count, so the same gesture feels the same on a 320 px phone and a tablet. The
-constants — and one line of reasoning each — are at the top of
-`src/ui/touch.ts`. The recogniser itself is a pure module: it takes plain
-`{pointerId, x, y, timeMs}` records and returns actions, which is why the feel
-of the gestures can be unit-tested rather than only waved at.
-
-### The on-screen pad
-
-Seven real `<button>` elements with accessible names and 44 px minimum targets:
-hold, both rotations, hard drop, left, soft drop, right. Left, right and soft
-drop auto-repeat while held, driven by the same `createAutoRepeat` clock the
-keyboard uses — a held ◀ and a held arrow key are literally the same code.
-
-The pad shows on touch-capable or narrow screens by default. The **Touchpad**
-button cycles auto → on → off and the choice is remembered in `localStorage`
-under `mega-tetris:touch-pad`. With the pad up, the readouts fold from two rails
-into one strip across the top of the well so the field keeps its height, and the
-keyboard help — no use to a thumb — steps aside.
-
-Pointer Events throughout, one primary pointer for gestures, so a second finger
-on the pad never disturbs a drag in progress. `touch-action: none` on the page
-and the play surface means nothing scrolls, pinch-zooms or pulls to refresh
-while playing; `touch-action: manipulation` on the controls keeps taps instant
-without giving double-tap zoom back. Locks and line clears get a short
-`navigator.vibrate` where the device supports it, silenced by
-`prefers-reduced-motion`.
-
-The four settings that persist — **Sound**, **Effects**, **Contrast** and
-**Touchpad** — live in the pause menu, which is where a player goes looking for
-them and which keeps the row under the well down to three buttons on a phone.
-
-Verified with touch emulation at 390x664, 412x823, 320x568, 812x375 (landscape)
-and 768x1024: every gesture and button lands the right action, nothing scrolls,
-no target is under 44 px, and the setting survives a reload.
-
-## Accessibility
-
-The game is meant to be playable with a keyboard, a screen reader, a
-high-contrast display or all three. Everything below is checked by
-`npm run a11y` or by a unit test, not just asserted here.
-
-### Structure
-
-`<header>` with the one `<h1>`, `<main>` around the well and its readouts,
-`<footer>` for the actions — three landmarks, headings that only ever step down
-one level at a time, and a real `<button>` with an accessible name behind every
-control. The touch pad's buttons carry an `aria-label` and hide their glyph from
-assistive technology, so a screen reader says "Rotate left" rather than reading
-out an arrow.
-
-### The well, in words
-
-The playfield canvas is not an opaque box. It is `role="img"`, labelled by a
-visually hidden paragraph that `ui/hud.ts` keeps current:
-
-> Playfield, 10 columns wide. The stack is 6 rows high, of 20. Score 1,200,
-> level 2, 14 lines cleared. Falling piece: T. Next: I, then O, then S.
-> Holding L.
-
-It says nothing about *where* the falling piece is, deliberately — a description
-that changed on every gravity tick would be unusable. The next queue and the hold
-slot get a hidden sentence of their own beside their thumbnails.
-
-### What gets announced
-
-One polite live region, and a high bar for what reaches it: **line clears** (with
-the count and the points), **level ups**, **pause and resume**, **game over with
-the final score**, and a confirmation when a setting changes. Locks, spawns,
-holds, moves and gravity are all silent. A live region that talks over the game
-is one players turn their screen reader off to escape.
-
-### Keyboard
-
-Full keyboard operability with no traps. Focus indicators come from a single
-`:focus-visible` baseline rule, so a control added later cannot arrive without
-one; the stylesheet contains no `outline: none` and a test says so. Tab order is
-DOM order — there is not a positive `tabindex` in the project.
-
-The pause menu and the help panel are real modal dialogs: focus moves in on
-open, is trapped while open (Tab wraps at both ends), Escape closes from
-anywhere, and focus returns to whatever opened it. Everything behind a dialog is
-marked `inert`, which takes it out of the tab order, the hit-testing and the
-accessibility tree at once — the manual focus wrap in `ui/dialog.ts` is the
-fallback for browsers that do not support it.
-
-### Help panel
-
-Press `?` or `H`, or the **Help** button, and it opens automatically on a first
-visit (remembered under `mega-tetris:seen-help`). It is a page, not a manual: a
-sentence about the goal, then the keyboard controls, the touch gestures, the
-scoring table and a note each on hold and ghost.
-
-The keyboard list is generated from `KEY_BINDINGS` and the scoring table from the
-engine's own `LINE_CLEAR_POINTS`, `SOFT_DROP_POINTS` and `HARD_DROP_POINTS`.
-Rebind a key or retune a score and the help panel follows; there is no second
-copy of either to go stale.
-
-### Pause menu
-
-Pausing opens it — Resume, Restart, Help, the four settings (**Sound**,
-**Effects**, **Contrast**, **Touchpad**) and your personal bests. Closing it
-counts you back in three, two, one rather than dropping you onto a falling
-piece, and the count runs off the game loop's own delta, so it stops with the
-tab.
-
-**Reset stats** lives there too, behind a two-step confirmation: the button asks,
-and a second, differently-worded control agrees. Erasing a personal best is the
-one destructive thing in the game, and a single mis-tap in a menu is not
-consent.
-
-### Contrast and colour
-
-Every text pair meets WCAG AA (4.5:1) and every control boundary and focus ring
-meets 1.4.11 (3:1) — in both palettes. That is not a claim, it is
-`src/ui/style.test.ts`: it parses the real declarations out of `style.css`,
-composites the translucent ones, computes the ratios and fails the suite if an
-edit drops one below the bar. It also checks that high contrast is *higher* on
-every pair, not merely different.
-
-The **Contrast** setting is three-way — auto, high, standard — and `auto`
-follows `prefers-contrast: more`, read live through `matchMedia`. High contrast
-darkens the cabinet, whitens the ink, brightens the seven faces and doubles the
-weight of every control border.
-
-**And it does not rely on colour.** Each piece kind gets a mark stamped into its
-blocks — a bar for I, a ring for O, a plus for T, mirrored diagonals for S and Z,
-a pillar for J, a double bar for L — drawn in a near-black tone derived from the
-face itself, at 7:1 or better against it. S and Z are the pair that catches
-people out, so they are the pair given mirrored marks.
-
-### Running the audit
+that produced it, in game terms with no colours, durations or sounds in them.
+`ui/effects.ts` and `ui/audio.ts` consume those and decide how it feels. The
+arrow only points one way, which is what keeps the rules deterministic and
+every celebration disposable.
+
+### The browser layer holds no rules
+
+`src/ui/` turns the state machine into a game you can play, and each module does
+one job: `renderer.ts` paints a `GameState`, `palette.ts` reads every colour out
+of the stylesheet, `input.ts` and `touch.ts` report intents, `loop.ts` times
+frames, `shell.ts` builds the DOM, `hud.ts` writes the readouts, `dialog.ts` is
+the modal machinery, `storage.ts` is the only file that touches `localStorage`,
+and `stats.ts` is the only place a personal best is decided.
+
+`src/main.ts` is the one file that knows about both halves. It owns the single
+mutable `state` reference, feeds real elapsed milliseconds into `update`, turns
+key presses and gestures into engine inputs, and decides policy the engine
+deliberately leaves open — whether "pause" means pause or resume, whether a
+restart replays the seed or deals a new one, what a help panel even is.
+
+Two boundaries are enforced by tests rather than by review
+(`src/wiring.test.ts`): the UI imports the engine only through its barrel
+`src/engine/index.ts`, and no file outside `ui/storage.ts` names `localStorage`.
+
+### One palette, in CSS
+
+Every colour is declared once, in the single `:root` block of `src/style.css`.
+The canvas keeps no second copy: `ui/palette.ts` reads the custom properties out
+of the computed style at startup and again whenever a colour preference changes,
+and each block's lit bevel, shaded edge and outline are derived from its face
+colour arithmetically. Restyling the game — including the seven piece faces — is
+a matter of editing CSS. `src/ui/palette.test.ts` parses the stylesheet and
+fails if the pre-first-paint fallback constants drift from it;
+`src/ui/layout.test.ts` does the same for the two geometry numbers CSS has to
+duplicate.
+
+## Testing
+
+Around 540 tests, in about three seconds.
+
+The engine carries a coverage floor because it is the part that must not rot.
+The browser layer does not, deliberately: the tests there cover the **pure**
+parts — the gesture recogniser, the storage format and its migrations, the
+stats ladder, HUD formatting, the auto-repeat clock, layout arithmetic, the
+audio cue table — and leave rendering to be verified by looking at it. Chasing
+a coverage number through the canvas would buy brittle tests rather than
+confidence.
+
+Two files run in jsdom rather than Node: `src/ui/a11y.test.ts` runs axe-core
+over the real shell three times (dialogs closed, pause menu open, help panel
+open) and then checks the things a static audit cannot see — focus moving in
+and back out, `Tab` wrapping, `Escape` not reaching the game underneath, the
+background going `inert`. Everything else runs in `node`, which is what stops a
+DOM reference sneaking into the engine.
+
+### Playtesting
+
+Behaviour that only exists in a browser is verified by driving one. Playwright
+is not a dependency; install it when you need it:
 
 ```bash
-npm run a11y
+npm install --no-save playwright
+npx playwright install chromium
 ```
 
-Two files, both part of `npm test` as well:
+Then drive `npm run dev` and read the game through `window.megaTetris`, a
+dev-only inspection hook that the production build folds away entirely. The
+sweep this project uses covers: full games at level 1 and at head starts up to
+level 10, both with hard drops and with gravity alone; rotation against both
+walls, on the floor and in a one-column well; hold spam, pause spam, restart
+mid-animation and hard drop into a game over; input hammered through the
+line-clear pause; a direction held into a wall for seconds; resize and
+orientation changes mid-game; backgrounding the tab; and a layout measurement
+at ten viewport sizes checking for page scroll, overlapping bands and a
+playable cell size.
 
-- **`src/ui/a11y.test.ts`** runs [axe-core](https://github.com/dequelabs/axe-core)
-  over the real shell in jsdom — the same `createShell` the game boots, in the
-  same document skeleton `index.html` provides — three times: dialogs closed,
-  pause menu open, help panel open. It then checks the things a static audit
-  cannot see: focus moves in and back out of a dialog, Tab wraps, Escape closes
-  and does not reach the game underneath, the background goes inert, and the live
-  region stays reachable while it is.
-- **`src/ui/style.test.ts`** does the contrast half, against the palette.
+## Contributing
 
-jsdom rather than a browser because it is the lightest thing that actually runs
-here, and axe's `color-contrast` rule is switched off in it for a reason worth
-knowing: axe measures contrast by asking a rendering engine what pixels it
-painted, and jsdom paints nothing. Leaving the rule on would report "incomplete"
-and check nothing, so the palette test does that job properly instead.
+The one rule that matters: **keep the engine deterministic.**
 
-Manually walked as well, in Chromium at 1280x900 and on an emulated iPhone 12:
-tab order is logical in both, the focus ring is visible on every stop, the help
-panel opens at its top rather than scrolled to its last button, and the pause
-menu fits without the page scrolling.
+`(seed, ordered list of calls) → state` must stay a pure function. In practice
+that means, for anything you add under `src/engine/`:
+
+1. **No ambient inputs.** No `Math.random`, no `Date.now`, no `performance.now`,
+   no DOM. Randomness comes from the bag in the snapshot; time arrives as an
+   explicit `deltaMs` argument. `purity.test.ts` enforces this, and it scans
+   files it has never seen before.
+2. **No mutation.** `update` and `applyInput` return a new snapshot and leave
+   their input untouched. New state goes in `GameState` as plain data, so a
+   snapshot stays comparable with `toEqual` and cloneable.
+3. **New state must be part of the snapshot.** A module-level counter or a
+   closure is invisible to a replay and will desynchronise it. If the rules need
+   to remember something, it is a field.
+4. **Slice time at deadlines.** If you add a timer, consume `deltaMs` in slices
+   bounded by it, the way gravity, lock delay and the clear pause already do, so
+   a 100 ms frame behaves exactly like six 16 ms ones.
+5. **Say what happened, not how to show it.** New behaviour worth animating gets
+   a new `GameEvent` in game terms. Durations, colours and sounds belong in
+   `src/ui/`.
+
+And in the other direction: **no game rules in `src/ui/`.** If you find yourself
+writing a score, a level threshold or a board dimension there, import the
+engine's constant instead — the help panel, the HUD and the stylesheet all get
+theirs that way.
+
+Before opening a change, run:
+
+```bash
+npm run lint && npm run typecheck && npm test && npm run coverage && npm run build
+```
+
+If you touched a colour or anything in `style.css`, `npm run a11y` is the one
+that will tell you whether it still meets AA.
+
+## Deployment
+
+`.github/workflows/deploy.yml` publishes to GitHub Pages on every push to
+`main`: `npm ci`, `npm test`, `npm run build`, then upload `dist/`. There is no
+`gh-pages` branch — `dist/` stays gitignored.
+
+## Credits and licensing
+
+Mega Tetris is an **original implementation**, written from scratch and
+inspired by the falling-block puzzle genre. No code, artwork, sound, font or
+level data is copied from any commercial implementation of the genre, and the
+project contains **no third-party or copyrighted assets of any kind** — the
+seven piece colours, the cabinet palette, the piece marks, the favicon and every
+sound are its own, defined in CSS or generated at runtime. The rotation kick
+tables are this project's own small ordered lists, not a reproduction of any
+published system.
+
+The only third-party code is the development toolchain — Vite, TypeScript,
+Vitest, ESLint, axe-core and jsdom — none of which is shipped to a player.

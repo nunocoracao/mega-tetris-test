@@ -10,6 +10,7 @@ import {
   TAP_MAX_MS,
   TOUCH_ACTIONS,
   TOUCH_PAD_BUTTONS,
+  VELOCITY_WINDOW_MS,
   createGestureRecognizer,
   isPadVisible,
   nextPadPreference,
@@ -383,5 +384,65 @@ describe('the pad visibility preference', () => {
     for (const preference of PAD_PREFERENCES) {
       expect(padPreferenceLabel(preference)).toMatch(/^[A-Z]/);
     }
+  });
+});
+
+describe('gestures that stall or get taken away', () => {
+  it('does not slam when a long drag down is taken slowly', () => {
+    // Each step is slower than the velocity window is long, so no sample is
+    // ever *inside* the window and the tail speed falls back to the last one.
+    // That fallback is what stops a deliberate, unhurried drag to the floor
+    // reading as a flick, however many cells it covers.
+    const step = 400;
+    const recognizer = makeRecognizer();
+    const f = finger(100, 100);
+    recognizer.down(at(f));
+    const actions: TouchAction[] = [];
+    for (let i = 1; i <= 8; i += 1) {
+      actions.push(...dragTo(recognizer, f, 100, 100 + SOFT * i, step));
+    }
+    f.t += step;
+    actions.push(...recognizer.up(at(f)));
+
+    expect(step).toBeGreaterThan(VELOCITY_WINDOW_MS);
+    expect(actions).not.toContain('hardDrop');
+    expect(actions.filter((action) => action === 'softDrop')).toHaveLength(8);
+  });
+
+  it('forgets a cancelled gesture instead of finishing it', () => {
+    const recognizer = makeRecognizer();
+    const f = finger(100, 100);
+    recognizer.down(at(f));
+    dragTo(recognizer, f, 100 + MOVE, 100, 16);
+
+    expect(recognizer.cancel(at(f))).toEqual([]);
+    // The pointer is gone, so its lift means nothing and neither does a move.
+    f.t += 16;
+    expect(recognizer.up(at(f))).toEqual([]);
+    expect(dragTo(recognizer, f, 100 + MOVE * 4, 100, 16)).toEqual([]);
+  });
+
+  it('ignores a cancelled second finger without disturbing the first', () => {
+    const recognizer = makeRecognizer();
+    const one = finger(100, 100, { id: 1 });
+    const two = finger(200, 100, { id: 2, t: 0 });
+    recognizer.down(at(one));
+    recognizer.down(at(two));
+
+    expect(recognizer.cancel(at(two))).toEqual([]);
+    // The primary pointer is untouched and still driving the gesture.
+    expect(dragTo(recognizer, one, 100 + MOVE, 100, 16)).toEqual(['moveRight']);
+  });
+
+  it('starts clean after a cancel, so the next gesture is not a continuation', () => {
+    const recognizer = makeRecognizer();
+    const f = finger(100, 100);
+    recognizer.down(at(f));
+    dragTo(recognizer, f, 100 + MOVE * 3, 100, 32);
+    recognizer.cancel(at(f));
+
+    const g = finger(100, 100, { t: 200 });
+    recognizer.down(at(g));
+    expect(dragTo(recognizer, g, 100 + MOVE, 100, 16)).toEqual(['moveRight']);
   });
 });

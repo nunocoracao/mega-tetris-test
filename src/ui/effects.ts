@@ -121,7 +121,7 @@ const BANNER_MS = 850;
 const BANNER_MS_STILL = 700;
 
 /** Milliseconds per row of the game-over sweep, counting up from the floor. */
-const GAME_OVER_ROW_MS = 24;
+export const GAME_OVER_ROW_MS = 24;
 
 /** How long the score count-up takes, however big the jump. */
 export const COUNT_UP_MS = 340;

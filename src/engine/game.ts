@@ -32,7 +32,7 @@ import {
 } from './board';
 import { getKicks, nextRotation, spawnPosition } from './pieces';
 import { createBagState, drawPiece, drawPieces, type BagState } from './random';
-import type { ActivePiece, PieceKind, Point, Rotation, RotationDirection } from './types';
+import type { ActivePiece, PieceKind, Point, RotationDirection } from './types';
 
 // ---------------------------------------------------------------------------
 // Tuning
@@ -263,7 +263,7 @@ export function ghostPiece(state: GameState): ActivePiece | null {
 /** A piece of `kind` at its spawn position and spawn rotation. */
 function spawnedPiece(kind: PieceKind, board: Board): ActivePiece {
   const at = spawnPosition(kind, board.width);
-  return { kind, rotation: 0 as Rotation, x: at.x, y: at.y };
+  return { kind, rotation: 0, x: at.x, y: at.y };
 }
 
 /** End the run, recording the final numbers for the UI. */
