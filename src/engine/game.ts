@@ -21,6 +21,7 @@
  * replaced (not accumulated) on the next call.
  */
 
+import { attackLines } from './attack';
 import {
   clearRows,
   createBoard,
@@ -30,6 +31,17 @@ import {
   pieceCells,
   type Board,
 } from './board';
+import {
+  cancelGarbage,
+  createGarbageRandom,
+  garbageDeadlineMs,
+  pendingGarbage,
+  queueGarbage,
+  riseGarbage,
+  tickGarbage,
+  GARBAGE_DELAY_MS,
+  type GarbageBatch,
+} from './garbage';
 import { getKicks, nextRotation, spawnPosition } from './pieces';
 import { createBagState, drawPiece, drawPieces, type BagState } from './random';
 import type { ActivePiece, PieceKind, Point, RotationDirection } from './types';
@@ -229,7 +241,9 @@ export function parseGameMode(value: unknown): GameMode {
  * its fortieth line, and the two deserve completely different sentences — and,
  * in Sprint's case, completely different treatment by the record book.
  *
- * `toppedOut`    — a piece had nowhere to spawn. In Sprint this is a DNF.
+ * `toppedOut`    — the well overflowed: a piece had nowhere to spawn, or rising
+ *                  garbage pushed the stack (or the falling piece) out of the
+ *                  top of it. In Sprint this is a DNF.
  * `goalReached`  — the mode's line goal was met. Sprint only.
  * `timeUp`       — the mode's clock ran out. Ultra only.
  */
@@ -317,6 +331,47 @@ export type GameEvent =
       readonly backToBack: boolean;
       readonly backToBackChain: number;
       readonly points: number;
+    }
+  /**
+   * A clear threw garbage at the other player.
+   *
+   * `lines` is what the attack table made of it, `cancelled` is how much of
+   * that went into eating this player's own queue, and `sent` is what is left
+   * for the opponent. Only ever fires in a run with garbage switched on.
+   */
+  | {
+      readonly type: 'attack';
+      readonly kind: PieceKind;
+      readonly lines: number;
+      readonly cancelled: number;
+      readonly sent: number;
+    }
+  /**
+   * Garbage was cancelled by an outgoing attack before it could land.
+   * `remaining` is how many rows are still queued afterwards.
+   */
+  | { readonly type: 'garbageCancelled'; readonly rows: number; readonly remaining: number }
+  /** Garbage joined the queue and started counting down. */
+  | {
+      readonly type: 'garbageQueued';
+      readonly id: number;
+      readonly rows: number;
+      readonly holeColumn: number;
+      readonly delayMs: number;
+      readonly pending: number;
+    }
+  /**
+   * Garbage rose: `rows` solid rows with a hole at `holeColumn` were pushed in
+   * at the bottom and everything above them moved up. `nudged` is how far the
+   * falling piece had to be lifted to stay legal.
+   */
+  | {
+      readonly type: 'garbageRose';
+      readonly id: number;
+      readonly rows: number;
+      readonly holeColumn: number;
+      readonly nudged: number;
+      readonly pending: number;
     }
   /** The level went up. */
   | { readonly type: 'levelUp'; readonly level: number; readonly previousLevel: number }
@@ -422,6 +477,43 @@ export interface GameState {
   readonly timeLimitMs: number;
   /** How the run finished, or `none` while it is still going. */
   readonly outcome: RunOutcome;
+  /**
+   * Versus rules are switched on for this run.
+   *
+   * Off unless `createGame` was given a `garbage` option, and everything about
+   * garbage hangs off it: `receiveGarbage` is a no-op, no garbage event is ever
+   * emitted, and the queue stays empty. A marathon, sprint or ultra run is
+   * therefore exactly the run it was before any of this existed.
+   */
+  readonly garbageEnabled: boolean;
+  /** How long an incoming batch waits before it rises. */
+  readonly garbageDelayMs: number;
+  /** Incoming attacks waiting to rise, in arrival order. */
+  readonly garbageQueue: readonly GarbageBatch[];
+  /**
+   * The generator the hole columns are drawn from. Separate from the bag on
+   * purpose — see `GARBAGE_SEED_SALT` — so taking a hit cannot change which
+   * pieces the run deals.
+   */
+  readonly garbageRandom: number;
+  /** The id the next batch will take. Part of the snapshot, so replays match. */
+  readonly nextGarbageId: number;
+  /** Rows of attack this run has sent to the other player, cancellation aside. */
+  readonly garbageSent: number;
+  /** Rows of garbage that have actually risen in this well. */
+  readonly garbageReceived: number;
+  /** Rows of incoming garbage this run's own clears have cancelled. */
+  readonly garbageCancelled: number;
+}
+
+/**
+ * Versus rules. Passing this object at all is what turns garbage on; there is
+ * no `enabled: false`, because a run that does not want garbage simply does not
+ * ask for it.
+ */
+export interface GarbageOptions {
+  /** Milliseconds a batch waits in the queue. Defaults to `GARBAGE_DELAY_MS`. */
+  readonly delayMs?: number;
 }
 
 export interface GameOptions {
@@ -429,9 +521,15 @@ export interface GameOptions {
   readonly startLevel?: number;
   /** Which mode to play. Defaults to `marathon`. */
   readonly mode?: GameMode;
+  /**
+   * Versus rules. Omitted — which is every solo run — means no garbage queue,
+   * no attacks and no garbage events.
+   */
+  readonly garbage?: GarbageOptions;
 }
 
 const NO_EVENTS: readonly GameEvent[] = Object.freeze([]);
+const NO_GARBAGE: readonly GarbageBatch[] = Object.freeze([]);
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -595,6 +693,9 @@ function lockActive(state: GameState, events: GameEvent[]): GameState {
 
   let { score, lines, backToBack, backToBackChain } = state;
   let clearDelayMs = 0;
+  let garbageQueue = state.garbageQueue;
+  let garbageSent = state.garbageSent;
+  let garbageCancelledTotal = state.garbageCancelled;
 
   const rows = findFullRows(board);
   const count = rows.length;
@@ -644,6 +745,29 @@ function lockActive(state: GameState, events: GameEvent[]): GameState {
       points,
     });
     clearDelayMs = LINE_CLEAR_DELAY_MS;
+
+    // Versus, and only versus: the same signals the clear was scored from tell
+    // the attack table how much garbage it throws. Cancellation comes first —
+    // what is queued against this player is eaten before anything crosses over,
+    // which is the mechanic the whole mode is built on.
+    if (state.garbageEnabled) {
+      const attack = attackLines({ count, spin, combo, backToBack: bonus });
+      const eaten = cancelGarbage(garbageQueue, attack);
+      garbageQueue = eaten.queue;
+      garbageCancelledTotal += eaten.cancelled;
+      const sent = attack - eaten.cancelled;
+      garbageSent += sent;
+      if (eaten.cancelled > 0) {
+        events.push({
+          type: 'garbageCancelled',
+          rows: eaten.cancelled,
+          remaining: pendingGarbage(garbageQueue),
+        });
+      }
+      if (attack > 0) {
+        events.push({ type: 'attack', kind: piece.kind, lines: attack, cancelled: eaten.cancelled, sent });
+      }
+    }
   }
 
   const level = levelForLines(state.startLevel, lines);
@@ -668,6 +792,9 @@ function lockActive(state: GameState, events: GameEvent[]): GameState {
     lockResets: 0,
     lastAction: 'none',
     clearDelayMs,
+    garbageQueue,
+    garbageSent,
+    garbageCancelled: garbageCancelledTotal,
   };
 
   // The finish line is checked *here*, on the clear that crossed it, rather
@@ -678,6 +805,71 @@ function lockActive(state: GameState, events: GameEvent[]): GameState {
   }
 
   return clearDelayMs > 0 ? locked : spawnNext(locked, events);
+}
+
+/**
+ * Spend `ms` of the run clock.
+ *
+ * One place, so that every timer the run owns moves together: the clock the
+ * mode's deadline is measured against, and every queued batch of garbage. The
+ * per-branch timers in `update` (gravity, lock delay, the clear pause) stay
+ * where they are, because each of those belongs to exactly one branch.
+ */
+function spendTime(state: GameState, ms: number): GameState {
+  if (!(ms > 0)) {
+    return state;
+  }
+  return {
+    ...state,
+    elapsedMs: state.elapsedMs + ms,
+    garbageQueue: tickGarbage(state.garbageQueue, ms),
+  };
+}
+
+/**
+ * Rise any batch whose delay has run out, oldest first.
+ *
+ * Called at the top of every slice of `update`, so a batch never sits at zero
+ * across a frame boundary, and once more after the loop for the delta that
+ * lands exactly on a deadline with nothing left to spend.
+ */
+function landDueGarbage(state: GameState, events: GameEvent[]): GameState {
+  if (state.garbageQueue.length === 0) {
+    return state;
+  }
+
+  let current = state;
+  for (;;) {
+    const batch = current.garbageQueue.find((queued) => queued.delayMs <= 0);
+    if (batch === undefined) {
+      return current;
+    }
+
+    const risen = riseGarbage(current.board, current.active, batch.rows, batch.holeColumn);
+    const queue = current.garbageQueue.filter((queued) => queued !== batch);
+    current = {
+      ...current,
+      board: risen.board,
+      active: risen.active,
+      garbageQueue: queue,
+      garbageReceived: current.garbageReceived + batch.rows,
+      // A piece that had to be lifted has moved, so its lock delay starts
+      // again; a piece the rise did not touch keeps the one it was counting.
+      lockMs: risen.nudged > 0 ? 0 : current.lockMs,
+    };
+    events.push({
+      type: 'garbageRose',
+      id: batch.id,
+      rows: batch.rows,
+      holeColumn: batch.holeColumn,
+      nudged: risen.nudged,
+      pending: pendingGarbage(queue),
+    });
+
+    if (risen.toppedOut) {
+      return endRun(current, 'toppedOut', events);
+    }
+  }
 }
 
 /**
@@ -710,6 +902,7 @@ export function createGame(options: GameOptions = {}): GameState {
   const mode = parseGameMode(options.mode ?? 'marathon');
   const rules = MODE_RULES[mode];
   const opening = drawPieces(createBagState(seed), NEXT_QUEUE_SIZE);
+  const garbage = options.garbage;
 
   const empty: GameState = {
     board: createBoard(),
@@ -738,6 +931,14 @@ export function createGame(options: GameOptions = {}): GameState {
     goalLines: rules.goalLines,
     timeLimitMs: rules.timeLimitMs,
     outcome: 'none',
+    garbageEnabled: garbage !== undefined,
+    garbageDelayMs: Math.max(0, Math.floor(garbage?.delayMs ?? GARBAGE_DELAY_MS)),
+    garbageQueue: NO_GARBAGE,
+    garbageRandom: createGarbageRandom(seed),
+    nextGarbageId: 1,
+    garbageSent: 0,
+    garbageReceived: 0,
+    garbageCancelled: 0,
   };
 
   // Creating a game is not an update, so it reports no events.
@@ -776,10 +977,19 @@ export function update(state: GameState, deltaMs: number): GameState {
       break;
     }
 
-    // How much of `remaining` the mode's clock will even allow. Infinite in a
-    // mode without one, which is what keeps Marathon's arithmetic untouched.
-    const untilDeadline =
+    // Garbage whose delay has run out rises before any more time is spent, so
+    // the rest of this slice sees the well it is actually going to act on.
+    current = landDueGarbage(current, events);
+    if (current.status !== 'playing') {
+      break;
+    }
+
+    // How much of `remaining` the run's own deadlines will even allow: the
+    // mode's clock, and the soonest batch of garbage. Both are infinite when
+    // absent, which is what keeps Marathon's arithmetic untouched.
+    const untilTimeLimit =
       current.timeLimitMs > 0 ? current.timeLimitMs - current.elapsedMs : Number.POSITIVE_INFINITY;
+    const untilDeadline = Math.min(untilTimeLimit, garbageDeadlineMs(current.garbageQueue));
 
     const piece = current.active;
 
@@ -787,11 +997,7 @@ export function update(state: GameState, deltaMs: number): GameState {
       // Between pieces: run down the line-clear pause, then spawn.
       const consumed = Math.min(remaining, Math.max(0, current.clearDelayMs), untilDeadline);
       remaining -= consumed;
-      current = {
-        ...current,
-        clearDelayMs: current.clearDelayMs - consumed,
-        elapsedMs: current.elapsedMs + consumed,
-      };
+      current = { ...spendTime(current, consumed), clearDelayMs: current.clearDelayMs - consumed };
       if (current.clearDelayMs <= 0 && !timeExpired(current)) {
         current = spawnNext(current, events);
       }
@@ -808,7 +1014,7 @@ export function update(state: GameState, deltaMs: number): GameState {
       );
       remaining -= consumed;
       const gravityMs = current.gravityMs + consumed;
-      current = { ...current, gravityMs, elapsedMs: current.elapsedMs + consumed };
+      current = { ...spendTime(current, consumed), gravityMs };
       if (gravityMs >= interval) {
         current = {
           ...current,
@@ -827,14 +1033,18 @@ export function update(state: GameState, deltaMs: number): GameState {
     const consumed = Math.min(remaining, Math.max(0, LOCK_DELAY_MS - current.lockMs), untilDeadline);
     remaining -= consumed;
     const lockMs = current.lockMs + consumed;
-    current = { ...current, lockMs, elapsedMs: current.elapsedMs + consumed };
+    current = { ...spendTime(current, consumed), lockMs };
     if (lockMs >= LOCK_DELAY_MS) {
       current = lockActive(current, events);
     }
   }
 
-  // The delta may have landed exactly on the deadline with nothing left to
-  // spend, in which case the loop exited without noticing. It has still run out.
+  // The delta may have landed exactly on a deadline with nothing left to spend,
+  // in which case the loop exited without noticing. Both deadlines have still
+  // arrived.
+  if (current.status === 'playing') {
+    current = landDueGarbage(current, events);
+  }
   if (current.status === 'playing' && timeExpired(current)) {
     current = endRun(current, 'timeUp', events);
   }
@@ -972,6 +1182,53 @@ function hold(state: GameState): GameState {
 }
 
 /**
+ * Take `rows` of garbage from the other player.
+ *
+ * The rows do not land here: they join the queue with the run's own delay on
+ * them, and `update` rises them when it runs out. Splitting, hole columns and
+ * the queue cap are `garbage.ts`'s business.
+ *
+ * A no-op in a run that did not ask for garbage — which is every solo run —
+ * and a no-op once the run is over. That is the guarantee behind "marathon
+ * behaves exactly as it did": there is no path from this function into a state
+ * whose `garbageEnabled` is false.
+ */
+export function receiveGarbage(state: GameState, rows: number): GameState {
+  if (!state.garbageEnabled || state.status === 'over' || !(rows > 0)) {
+    return withEvents(state, NO_EVENTS);
+  }
+
+  const queued = queueGarbage({
+    queue: state.garbageQueue,
+    rows,
+    delayMs: state.garbageDelayMs,
+    width: state.board.width,
+    random: state.garbageRandom,
+    nextId: state.nextGarbageId,
+  });
+
+  const pending = pendingGarbage(queued.queue);
+  const events: GameEvent[] = queued.added.map((batch) => ({
+    type: 'garbageQueued',
+    id: batch.id,
+    rows: batch.rows,
+    holeColumn: batch.holeColumn,
+    delayMs: batch.delayMs,
+    pending,
+  }));
+
+  return withEvents(
+    {
+      ...state,
+      garbageQueue: queued.queue,
+      garbageRandom: queued.random,
+      nextGarbageId: queued.nextId,
+    },
+    events,
+  );
+}
+
+/**
  * Apply a player action.
  *
  * `pause`, `resume` and `restart` always work; every other input is ignored
@@ -981,11 +1238,16 @@ function hold(state: GameState): GameState {
 export function applyInput(state: GameState, input: GameInput): GameState {
   switch (input.type) {
     case 'restart':
-      // Same seed, same starting level, same mode — a rerun, not a different
-      // game. A UI that wants a different sequence, or a different mode, calls
-      // `createGame`.
+      // Same seed, same starting level, same mode, same versus rules — a rerun,
+      // not a different game. A UI that wants a different sequence, or a
+      // different mode, calls `createGame`.
       return {
-        ...createGame({ seed: state.seed, startLevel: state.startLevel, mode: state.mode }),
+        ...createGame({
+          seed: state.seed,
+          startLevel: state.startLevel,
+          mode: state.mode,
+          garbage: state.garbageEnabled ? { delayMs: state.garbageDelayMs } : undefined,
+        }),
         status: 'playing',
       };
 

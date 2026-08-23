@@ -15,8 +15,26 @@
 /** The seven classic four-cell shapes, named after the letters they resemble. */
 export type PieceKind = 'I' | 'O' | 'T' | 'S' | 'Z' | 'J' | 'L';
 
-/** A board cell: either empty (`null`) or filled with the kind that locked there. */
-export type Cell = PieceKind | null;
+/**
+ * A cell that was pushed up from the bottom of the well rather than placed by
+ * a player — a garbage row's block. It is deliberately *not* a `PieceKind`: no
+ * piece ever locked there, it has no shape and no owner, and code that maps a
+ * cell to a colour or a mark has to decide what to do with it rather than
+ * quietly painting it as an `L`.
+ *
+ * The rules do not care: collision, line clearing and top-out treat every
+ * non-`null` cell alike. Only the renderer tells them apart.
+ */
+export type GarbageCell = 'G';
+
+/** The one garbage cell value, so nothing has to write the letter twice. */
+export const GARBAGE_CELL: GarbageCell = 'G';
+
+/**
+ * A board cell: empty (`null`), the kind that locked there, or a garbage block
+ * pushed up from below.
+ */
+export type Cell = PieceKind | GarbageCell | null;
 
 /** Rotation state, counted clockwise from the spawn orientation. */
 export type Rotation = 0 | 1 | 2 | 3;

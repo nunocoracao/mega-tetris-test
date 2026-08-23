@@ -39,12 +39,13 @@ import {
   cellAt,
   getCells,
   type Board,
+  type Cell,
   type GameEvent,
   type PieceKind,
   type Point,
 } from '../engine';
 import { clearName, comboName, spinName } from './hud';
-import { getPalette, withAlpha } from './palette';
+import { getPalette, withAlpha, type BlockKey } from './palette';
 import type { FieldView } from './renderer';
 
 /** The clear event, named once so `spawnClear` can take the whole thing. */
@@ -272,7 +273,7 @@ interface Shard {
   angle: number;
   /** Radians per second. */
   spin: number;
-  kind: PieceKind;
+  kind: BlockKey;
 }
 
 interface Flash {
@@ -284,7 +285,7 @@ interface Flash {
   rowCount: number;
   boardWidth: number;
   /** `rowCount * boardWidth` cells, row-major, as they were before the clear. */
-  kinds: (PieceKind | null)[];
+  kinds: Cell[];
   big: boolean;
   /** Hold at full strength and vanish, rather than fading. */
   still: boolean;
@@ -407,7 +408,7 @@ export function createEffects(options: EffectsOptions): Effects {
       rowCount: 0,
       boardWidth: 0,
       // Four rows of a board wider than any we ship, so a clear never allocates.
-      kinds: new Array<PieceKind | null>(4 * 16).fill(null),
+      kinds: new Array<Cell>(4 * 16).fill(null),
       big: false,
       still: false,
     });
@@ -502,7 +503,7 @@ export function createEffects(options: EffectsOptions): Effects {
   }
 
   /** A shard thrown from the centre of cell `(x, y)`. */
-  function spawnShard(x: number, y: number, kind: PieceKind, speed: number, lifeMs: number): void {
+  function spawnShard(x: number, y: number, kind: BlockKey, speed: number, lifeMs: number): void {
     const shard = takeShard();
     if (shard === null) {
       return;
@@ -547,7 +548,7 @@ export function createEffects(options: EffectsOptions): Effects {
    * previous board plus the cells the `lock` event just added is exactly the
    * board that was full, and that is what we read the shard colours out of.
    */
-  function kindBefore(board: Board, lock: LockRecord | null, x: number, y: number): PieceKind | null {
+  function kindBefore(board: Board, lock: LockRecord | null, x: number, y: number): Cell {
     if (lock !== null) {
       for (const cell of lock.cells) {
         if (cell.x === x && cell.y === y) {

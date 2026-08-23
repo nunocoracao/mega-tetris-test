@@ -20,12 +20,20 @@ import {
   VISIBLE_HEIGHT,
   type ActivePiece,
   type Board,
+  type Cell,
   type GameState,
   type PieceKind,
   type Rotation,
 } from '../engine';
 import { blockMark, highContrast, type BlockMark } from './contrast';
-import { GHOST_ALPHA, GRID_ALPHA, getPalette, withAlpha, type BlockColor } from './palette';
+import {
+  GHOST_ALPHA,
+  GRID_ALPHA,
+  getPalette,
+  withAlpha,
+  type BlockColor,
+  type BlockKey,
+} from './palette';
 
 /**
  * How strongly the spawn strip above the well is painted. Enough to see the
@@ -296,7 +304,7 @@ function drawBlock(
   y: number,
   size: number,
   color: BlockColor,
-  kind?: PieceKind,
+  cell?: Cell,
 ): void {
   const inset = Math.max(1, Math.round(size * 0.06));
   const left = x + inset;
@@ -335,8 +343,9 @@ function drawBlock(
     ctx.stroke();
   }
 
-  if (bold && kind !== undefined) {
-    drawMark(ctx, blockMark(kind), left, top, side, color);
+  const mark = bold && cell !== undefined ? blockMark(cell) : null;
+  if (mark !== null) {
+    drawMark(ctx, mark, left, top, side, color);
   }
 
   ctx.strokeStyle = bold ? color.outline : color.shade;
@@ -572,7 +581,7 @@ type BlockPainter = (
   y: number,
   size: number,
   color: BlockColor,
-  kind?: PieceKind,
+  cell?: Cell,
 ) => void;
 
 /**
@@ -586,7 +595,7 @@ function drawPiece(
   layout: GridLayout,
   hiddenRows: number,
   painter: BlockPainter,
-  pieces: Readonly<Record<PieceKind, BlockColor>>,
+  pieces: Readonly<Record<BlockKey, BlockColor>>,
 ): void {
   const color = pieces[piece.kind];
   for (const offset of getCells(piece.kind, piece.rotation)) {

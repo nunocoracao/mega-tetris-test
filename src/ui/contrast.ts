@@ -19,7 +19,7 @@
  * module deliberately mirrors.
  */
 
-import { PIECE_KINDS, type PieceKind } from '../engine';
+import { GARBAGE_CELL, PIECE_KINDS, type Cell, type PieceKind } from '../engine';
 import type { SettingAccess } from './storage';
 
 /** `auto` follows the operating system; the other two override it. */
@@ -105,14 +105,22 @@ export const PIECE_MARK: Readonly<Record<PieceKind, BlockMark>> = {
   L: 'stack',
 };
 
-/** The mark for a piece kind. Total over `PieceKind` — a test says so. */
-export function blockMark(kind: PieceKind): BlockMark {
-  return PIECE_MARK[kind];
+/**
+ * The mark for a filled cell, or `null` when it does not get one.
+ *
+ * Total over `Cell` — a test says so. Garbage is the one filled cell with no
+ * mark, and deliberately: marks exist to tell the seven pieces apart without
+ * colour, and garbage is not one of them. It is already the only block on the
+ * well that is grey and the only one with a flat face, which is two non-colour
+ * cues without stamping a shape it would then share with a piece.
+ */
+export function blockMark(cell: Cell): BlockMark | null {
+  return cell === null || cell === GARBAGE_CELL ? null : PIECE_MARK[cell];
 }
 
 /** Every kind's mark, in `PIECE_KINDS` order. Handy for tests and docs. */
 export function allMarks(): readonly BlockMark[] {
-  return PIECE_KINDS.map(blockMark);
+  return PIECE_KINDS.map((kind) => PIECE_MARK[kind]);
 }
 
 // ---------------------------------------------------------------------------

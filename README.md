@@ -2,7 +2,7 @@
 
 A cheerful falling-block puzzle game that lives entirely in the browser — a
 tiny arcade cabinet at a URL. No backend and no accounts: three static files
-totalling **53 KB gzipped**, and you are playing. Install it and it is a cabinet
+totalling **55 KB gzipped**, and you are playing. Install it and it is a cabinet
 on your home screen too, playable with the network switched off.
 
 **▶ [Play it](https://nunocoracao.github.io/mega-tetris-test/)**
@@ -85,7 +85,7 @@ npm run dev     # http://localhost:5173
 
 `npm run coverage` enforces a floor on `src/engine/**` — 90% statements, 85%
 branches — and fails the command if an edit drops below it. It currently sits
-at **98% statements, 96% branches, 100% functions**. The browser layer is
+at **96% statements, 89% branches, 100% functions**. The browser layer is
 reported but not gated; see [Testing](#testing) for why.
 
 `vite.config.ts` sets `base: './'`, so the contents of `dist/` work from any
@@ -605,6 +605,103 @@ easy scoring skipped. Those runs keep their own personal bests and stay out of
 the headline high score. Totals — games played, lines all-time — count
 everything, because they record time spent rather than skill.
 
+## Versus: garbage, attacks and the bot
+
+The rules for playing *against* something live in `src/engine/` alongside
+everything else, and — as of this writing — nothing renders them yet: the screen
+is a separate piece of work. What follows is the rule book, not the feature.
+
+A versus run is an ordinary run with `garbage` passed to `createGame`. Leave it
+off and there is no queue, no attack, no garbage event and no difference of any
+kind: marathon, sprint and ultra are byte-for-byte the runs they always were,
+and `replay.test.ts` pins the numbers a pre-versus engine produced to prove it.
+`REPLAY_FORMAT_VERSION` stays at **1** for exactly that reason — no rule an
+existing run depends on has moved.
+
+### Garbage
+
+A garbage row is a solid row with one column open, pushed in at the bottom so
+everything above it rises.
+
+| Rule | Behaviour |
+| ---- | --------- |
+| Hole column | Drawn from a seeded generator in the snapshot, salted off the run seed so it can never disturb the piece bag. |
+| One hole per batch | Every row of one attack shares a column. Four rows from a quad are a four-deep shaft you can drop an `I` into, not four separate problems. Separate batches draw separately, and may coincide. |
+| Batch size | At most 4 rows; a bigger attack is split into several batches with several holes. |
+| Delay | `900ms` in the queue before it rises, counted down in slices bounded by its own deadline — so one 100 ms frame behaves exactly like six 16 ms ones. |
+| The falling piece | Lifted by as little as it takes to stay legal, usually nothing. |
+| Top-out | A rise may not push blocks out of the top of the well, and may not push the falling piece any further out of it than it already was. Either ends the run. |
+| Queue cap | 16 batches. Past that the overflow is dropped rather than compounding. |
+
+### The attack table
+
+How much garbage a clear sends. It reads the signals the scoring code already
+produced — rows, spin, combo, back-to-back — rather than working any of them out
+a second time.
+
+| Rows cleared | Plain | Spin | Kicked spin |
+| ------------ | ----- | ---- | ----------- |
+| No lines     | 0     | 0    | 0           |
+| Single       | **0** | 2    | 1           |
+| Double       | 1     | 4    | 2           |
+| Triple       | 2     | 6    | 3           |
+| Quad         | 4     | 8    | 4           |
+
+Plus the combo tail — `0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 4, 5` indexed by the combo
+counter, settling at 5 — and a flat **+1** for a clear that took the
+back-to-back bonus.
+
+A single sends nothing, and that is the rule the rest of the table hangs off:
+clearing one row at a time is how you survive, not how you attack.
+
+**Cancellation** is the mechanic the mode is built on. An outgoing attack is
+spent on your own queue first, soonest batch first, and only the remainder
+crosses to the other player. Without it, versus is two people playing solitaire
+next to each other.
+
+The tables are plain exported constants in `src/engine/attack.ts`; this section
+and the tests both read them rather than copying the numbers.
+
+### The bot
+
+`src/engine/bot.ts`. It is an opponent, not a simulation of one: every move it
+makes goes through the same `applyInput` a person's keyboard does, so a bot game
+obeys the same rules, records into the same replay log, and cannot cheat even by
+accident. Its own randomness is a `randomStep` state carried in `BotState`, so
+the same state, difficulty and seed always produce the same moves.
+
+It scores a placement by locking the piece into a copy of the board, clearing
+whatever completed, and weighing five numbers:
+
+| Term | Weight | Why |
+| ---- | ------ | --- |
+| Lines cleared | **+0.760666** | Slightly more than the height a clear removes, so it will take a single to stay low. |
+| Aggregate height | **−0.510066** | The stack's total mass. |
+| Holes | **−0.35663** | A buried cell, which no placement can undo. |
+| Bumpiness | **−0.184483** | Sum of the steps between neighbouring columns. |
+| Well depth | **−0.4** | Only the part of a well past four rows — the length of the longest piece. The other four terms are perfectly happy to dig a chasm nothing can fill. |
+
+The first four are the familiar weights from the published genetic-algorithm
+work on this heuristic; the well term is this project's own. All five are named
+constants in `BOT_WEIGHTS`.
+
+Difficulty is **thinking and speed, never a handicap**. There is no setting that
+gives a bot free garbage, slower gravity or a kinder top-out; a rigged game is
+felt within a minute and beating one is worth nothing.
+
+| | Think | Between presses | Looks ahead | Uses hold | Misplays |
+| --- | ----- | --------------- | ----------- | --------- | -------- |
+| Easy | 380 ms | 85 ms | 1 piece | no | 32%, from the top 6 |
+| Medium | 200 ms | 50 ms | 1 piece | yes | 12%, from the top 3 |
+| Hard | 80 ms | 22 ms | 2 pieces | yes | never |
+
+Its tests are behavioural, because the search should stay free to get better: on
+a fixed seed a hard bot survives two minutes and clears a hundred rows, harder
+settings out-clear easier ones on every one of five seeds, a full run is
+identical across two simulations, a recorded bot run replays to the same state,
+and every button it presses is re-applied to the state it was handed and has to
+move the game.
+
 ## Accessibility
 
 Everything here is checked by `npm run a11y` or by a unit test, not merely
@@ -674,12 +771,18 @@ dependencies:
 
 | File         | Raw      | Gzipped     |
 | ------------ | -------- | ----------- |
-| `index.js`   | 135.9 KB | **45.0 KB** |
+| `index.js`   | 139.4 KB | **46.3 KB** |
 | `index.css`  | 33.2 KB  | **7.1 KB**  |
 | `index.html` | 2.5 KB   | **1.1 KB**  |
-| **Total**    | 171.6 KB | **53.2 KB** |
+| **Total**    | 175.1 KB | **54.5 KB** |
 
-JS + CSS is **52.1 KB gzipped**, against a budget of 100 KB.
+JS + CSS is **53.4 KB gzipped**, against a budget of 100 KB.
+
+The versus engine cost **+1.3 KB gzipped**, all of it JS: the garbage queue and
+the attack table, which `game.ts` imports and so cannot be shaken out. The bot
+itself is free — nothing in `main.ts` reaches it yet, so Vite drops the whole of
+`engine/bot.ts` from the bundle. It will not stay free once there is a screen
+to put it on.
 
 The three new skins cost **+1.8 KB gzipped** (1.2 KB of CSS, 0.6 KB of JS),
 against a ceiling of about 2 KB set before any of them was written. Six blocks
@@ -779,8 +882,9 @@ must go *in the snapshot*: a module-level counter or a closure is invisible to a
 replay and desynchronises it.
 
 `update` consumes its delta in slices bounded by the next deadline — the next
-gravity step, the end of the lock delay, the end of a line-clear pause — so one
-long frame produces exactly the same sequence of events as the many short
+gravity step, the end of the lock delay, the end of a line-clear pause, the
+mode's clock, the next batch of [garbage](#versus-garbage-attacks-and-the-bot) —
+so one long frame produces exactly the same sequence of events as the many short
 frames it stands in for. `src/engine/purity.test.ts` scans every engine source
 file for `Math.random`, `Date.now`, `performance.now`, DOM globals and
 `import.meta.env`, so adding an engine file adds a check.
@@ -788,7 +892,8 @@ file for `Math.random`, `Date.now`, `performance.now`, DOM globals and
 ### Events drive the effects, and nothing flows back
 
 Each snapshot carries `events` — `spawn`, `lock`, `hardDrop`, `spin`,
-`rowsCleared`, `levelUp`, `hold`, `runEnd` — describing only what happened
+`rowsCleared`, `levelUp`, `hold`, `runEnd`, and in a versus run `attack`,
+`garbageQueued`, `garbageRose` and `garbageCancelled` — describing only what happened
 during the call that produced it, in game terms with no colours, durations or
 sounds in them. `rowsCleared` says how many rows went, whether it was a spin,
 how long the combo and back-to-back chains are, and what it was worth; it does
