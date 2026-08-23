@@ -64,6 +64,32 @@ describe('the composition root', () => {
     }
   });
 
+  it('registers the service worker in production only', () => {
+    // A cache-first worker in front of the dev server serves yesterday's game
+    // and hot reload stops meaning anything. The guard lives inside `pwa.ts`
+    // rather than at the call site, so the whole body — the registration, the
+    // update watch, the reload — folds out of a development bundle; and it has
+    // to come *before* the registration or it guards nothing.
+    const pwa = stripComments(readFileSync(join(SRC_DIR, 'ui/pwa.ts'), 'utf8'));
+
+    expect(pwa).toContain('import.meta.env.PROD');
+    expect(pwa.indexOf('import.meta.env.PROD')).toBeLessThan(pwa.indexOf('.register('));
+    expect(MAIN).toContain('registerServiceWorker(');
+  });
+
+  it('reloads for an update only when the player has pressed the button', () => {
+    // The rule the update path exists for. Nothing in `pwa.ts` reloads on its
+    // own: both calls are downstream of `applyUpdate`, which is wired to the
+    // Reload button and to nothing else.
+    const pwa = stripComments(readFileSync(join(SRC_DIR, 'ui/pwa.ts'), 'utf8'));
+
+    expect([...pwa.matchAll(/location\.reload/g)]).toHaveLength(2);
+    expect(pwa.indexOf('applyUpdate')).toBeLessThan(pwa.indexOf('location.reload'));
+    expect(MAIN).toContain('shell.updateReload.addEventListener');
+    expect(MAIN).toContain('serviceWorker.applyUpdate()');
+    expect([...MAIN.matchAll(/applyUpdate\(\)/g)]).toHaveLength(1);
+  });
+
   it('keeps the dev-only inspection hook behind an env guard', () => {
     // The hook is how the browser playtests read the game. Shipping it would
     // put the whole state machine on `window` for no one's benefit.

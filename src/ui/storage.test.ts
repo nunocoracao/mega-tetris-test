@@ -244,6 +244,7 @@ describe('round tripping', () => {
       seenHelp: true,
       startLevel: 6,
       mode: 'sprint',
+      installDismissed: false,
     });
     expect(marathonBest(second.stats())).toEqual({
       score: 7777,
@@ -307,6 +308,7 @@ describe('migration', () => {
       seenHelp: true,
       startLevel: 1,
       mode: 'marathon',
+      installDismissed: false,
     });
     expect(migrated.stats).toEqual(defaultStats());
   });
@@ -348,6 +350,7 @@ describe('migration', () => {
       seenHelp: true,
       startLevel: 4,
       mode: 'marathon',
+      installDismissed: false,
     });
   });
 
@@ -395,8 +398,22 @@ describe('migration', () => {
     expect(createStore({ area }).daily().history).toEqual([dailyEntry()]);
   });
 
+  it('carries a version 4 store forward with the install offer outstanding', () => {
+    // The build before the game was installable. Nothing moves in this step —
+    // it exists so the table has no gap — and the new flag arrives at its
+    // default, which is the honest description of a player who has never been
+    // asked.
+    const migrated = migrate({ ...version3(), version: 4, daily: defaultDaily() });
+
+    expect(migrated.version).toBe(SCHEMA_VERSION);
+    expect(migrated.settings.installDismissed).toBe(false);
+    expect(migrated.settings.mode).toBe('sprint');
+    expect(migrated.stats.modes.marathon.base.score).toBe(12_345);
+    expect(migrated.daily).toEqual(defaultDaily());
+  });
+
   it('walks a version 1 store all the way to the daily era in one go', () => {
-    // Three steps in the table, run back to back. The oldest store there is
+    // Four steps in the table, run back to back. The oldest store there is
     // still has to arrive as something this build can read.
     const migrated = migrate({ version: 1, settings: { pad: 'on' } });
 
@@ -482,6 +499,7 @@ describe('the loose keys of the ad-hoc era', () => {
       seenHelp: true,
       startLevel: 1,
       mode: 'marathon',
+      installDismissed: false,
     });
     for (const key of Object.values(LEGACY_KEYS)) {
       expect(area.map.has(key), `${key} was left behind`).toBe(false);

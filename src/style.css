@@ -80,6 +80,20 @@
 
   /* --------------------------------------------------------- geometry --- */
 
+  /*
+   * Installed on a phone there is no browser chrome keeping the cabinet clear
+   * of the notch and the home indicator, so the page pays the insets itself —
+   * the document is already `viewport-fit=cover`, which is what makes them
+   * non-zero. They are folded in with `max()` rather than added, because on
+   * every desktop and in most browsers `env()` is `0px` and the padding should
+   * stay exactly what it was: the layout only gives ground where the hardware
+   * actually takes a bite.
+   */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+
   --radius: 0.85rem;
   --radius-sm: 0.5rem;
   --gap: clamp(0.4rem, 1.5vmin, 0.85rem);
@@ -298,15 +312,17 @@ body {
  */
 .game {
   display: grid;
-  /* Header, body, actions, pad. The pad row is `auto`, so when it is hidden it
-   * collapses to nothing and the layout is exactly what it was before. */
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  /* Header, body, actions, update, pad. The last two rows are `auto`, so when
+   * they are hidden they collapse to nothing and the layout is exactly what it
+   * was before. */
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
   justify-items: center;
   gap: var(--gap);
   width: 100%;
   max-width: 64rem;
   height: 100dvh;
-  padding: var(--page-pad);
+  padding: max(var(--page-pad), var(--safe-top)) max(var(--page-pad), var(--safe-right))
+    max(var(--page-pad), var(--safe-bottom)) max(var(--page-pad), var(--safe-left));
 }
 
 .game__header {
@@ -384,6 +400,50 @@ body {
   flex-wrap: wrap;
   justify-content: center;
   gap: 0.5rem;
+}
+
+/* ------------------------------------------------------------- update -- */
+
+/*
+ * "A new version is ready."
+ *
+ * A row of its own between the actions and the pad — never a banner, never a
+ * modal, never anything over the well. A player who is mid-run should be able
+ * to look at this, decide it can wait, and go on playing; a toast floating over
+ * the field cannot be ignored, which makes it a demand rather than an offer.
+ *
+ * It appears in the flow, so the row it takes comes out of the field's height
+ * rather than off the top of it: `.playfield` is sized by `max-height`, and
+ * gives way by a few pixels without the stack jumping.
+ */
+.update {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem 0.75rem;
+  width: 100%;
+  max-width: 32rem;
+  padding: 0.45rem 0.7rem;
+  border: var(--control-border-width) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+
+.update[hidden] {
+  display: none;
+}
+
+.update__text {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--fg);
+}
+
+.update__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
 }
 
 /* ----------------------------------------------------------- playfield -- */
@@ -1041,7 +1101,11 @@ body {
   z-index: 20;
   display: grid;
   place-items: center;
-  padding: var(--page-pad);
+  /* Fixed to the viewport, so it is outside `.game`'s padding and has to pay
+   * the safe-area insets itself — otherwise the close button of a full-height
+   * help panel sits under the notch. */
+  padding: max(var(--page-pad), var(--safe-top)) max(var(--page-pad), var(--safe-right))
+    max(var(--page-pad), var(--safe-bottom)) max(var(--page-pad), var(--safe-left));
   background: var(--overlay-veil);
 }
 
@@ -1796,4 +1860,28 @@ body {
 :root[data-motion='reduced'] .overlay[data-state='over'],
 :root[data-motion='reduced'] .score--urgent {
   animation: none;
+}
+
+/* --------------------------------------------------------- standalone -- */
+
+/*
+ * Installed, with no browser chrome around it.
+ *
+ * This block is short on purpose, because the game was already written not to
+ * lean on a browser: dialogs close on their own controls and on `Escape`
+ * rather than on a back button, nothing says "this tab", and the layout has
+ * always sized itself to `100dvh` rather than to whatever a URL bar left over.
+ * The insets are handled in `:root` for every display mode, since a phone with
+ * a notch has one in a tab as well.
+ *
+ * What is genuinely different is the offer to install: a cabinet that is
+ * already on the home screen has nothing to offer. `ui/pwa.ts` never shows the
+ * button in this mode either — this is the belt to those braces, and it works
+ * even if the app is launched standalone in a browser that fires the event
+ * anyway.
+ */
+@media (display-mode: standalone) {
+  [data-install] {
+    display: none !important;
+  }
 }

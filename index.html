@@ -8,16 +8,21 @@
       name="description"
       content="Mega Tetris is a bright little falling-block puzzle game that runs entirely in your browser. Stack, spin and clear lines with the keyboard — no install, no account, no waiting."
     />
+    <!--
+      The cabinet's own `--cabinet-deep`, before the stylesheet has loaded and
+      before any script has run. `src/ui/pwa.ts` keeps it in step with the
+      contrast setting from there on; `build/manifest.test.ts` fails if this
+      copy ever drifts from the palette.
+    -->
     <meta name="theme-color" content="#120b1b" />
     <meta name="color-scheme" content="dark" />
     <!--
-      Favicon: four blocks from the game's own palette, inline as an SVG data
-      URI. No image asset, no extra request, nothing to block first paint.
+      The favicon, the Apple touch icon, the manifest link and the standalone
+      metas are injected into this head by `build/plugin.ts` — all of them are
+      generated from `src/style.css` and `build/icon.ts`, so there is no hex
+      here to fall out of date. The favicon is still an inline SVG data URI:
+      no image asset, no extra request, nothing to block first paint.
     -->
-    <link
-      rel="icon"
-      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23120b1b'/%3E%3Cg%3E%3Crect x='4.5' y='4.5' width='11' height='11' rx='3' fill='%233ddad7'/%3E%3Crect x='16.5' y='4.5' width='11' height='11' rx='3' fill='%23ffc857'/%3E%3Crect x='4.5' y='16.5' width='11' height='11' rx='3' fill='%23ff5d73'/%3E%3Crect x='16.5' y='16.5' width='11' height='11' rx='3' fill='%23c77dff'/%3E%3C/g%3E%3C/svg%3E"
-    />
   </head>
   <body>
     <div id="app"></div>

@@ -63,4 +63,18 @@ export default tseslint.config(
     files: ['*.js'],
     languageOptions: { globals: { ...globals.node } },
   },
+
+  {
+    // The generators run in Node, not in a browser.
+    files: ['build/**/*.ts'],
+    languageOptions: { globals: { ...globals.node } },
+  },
+
+  {
+    // The service worker is shipped as it is written, so it is linted as it is
+    // written: a classic worker script, outside the app's tsconfig project,
+    // with the service-worker globals and nothing else.
+    files: ['build/sw.js'],
+    languageOptions: { globals: { ...globals.serviceworker } },
+  },
 );

@@ -20,5 +20,5 @@
 
     "noEmit": true
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "build", "vite.config.ts"]
 }

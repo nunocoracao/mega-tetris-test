@@ -58,6 +58,7 @@ import { createKeyboardInput, normalizeKey, type ActionId } from './ui/input';
 import { createLoop } from './ui/loop';
 import { createMotionPreference } from './ui/motion';
 import { refreshPalette, watchPalette } from './ui/palette';
+import { createInstallPrompt, registerServiceWorker, syncThemeColor } from './ui/pwa';
 import { createBoardRenderer, createPiecePanelRenderer } from './ui/renderer';
 import { createShell } from './ui/shell';
 import { clampStartLevel, type StatsUpdate } from './ui/stats';
@@ -866,12 +867,18 @@ function applySound(): void {
  * Order matters: the root attribute is what swaps the CSS palette, so the
  * custom properties have to be re-read afterwards or the blocks would keep
  * painting in the old colours.
+ *
+ * The status bar goes with them. Installed, `theme-color` is the colour of the
+ * system chrome around the game rather than a nicety in a tab, and a cabinet in
+ * high contrast under a default-palette status bar has a seam across the top of
+ * the phone.
  */
 function applyContrast(): void {
   const high = contrast.high();
   document.documentElement.dataset['contrast'] = high ? 'on' : 'off';
   setHighContrast(high);
   refreshPalette();
+  syncThemeColor();
   shell.contrastToggle.textContent = `Contrast: ${contrast.label()}`;
   shell.contrastToggle.title =
     contrast.setting() === 'auto'
@@ -908,7 +915,53 @@ shell.contrastToggle.addEventListener('click', () => {
   draw();
 });
 
-watchPalette(() => draw());
+watchPalette(() => {
+  // The system changed the palette under us; the status bar is part of it.
+  syncThemeColor();
+  draw();
+});
+
+// -- installing, and updating -----------------------------------------------
+
+/**
+ * The service worker's page-side half.
+ *
+ * `registerServiceWorker` does nothing at all outside a production bundle, so
+ * `npm run dev` keeps hot-reloading. What it does in production is notice a new
+ * deploy finishing its install and say so — and then wait, because the one
+ * thing an update must never do is arrive underneath a run.
+ */
+const serviceWorker = registerServiceWorker({
+  onUpdateReady() {
+    shell.updateBar.hidden = false;
+    hud.announce('A new version is ready. Reload when you are between games.');
+  },
+});
+
+shell.updateReload.addEventListener('click', () => {
+  serviceWorker.applyUpdate();
+});
+
+shell.updateDismiss.addEventListener('click', () => {
+  shell.updateBar.hidden = true;
+  // The button that had focus has just gone; put it back on the well rather
+  // than letting it fall to the top of the document.
+  shell.playfield.focus();
+});
+
+/**
+ * The install offer.
+ *
+ * Only ever shown because the browser fired `beforeinstallprompt` — which is
+ * the browser saying it would have offered installation itself — and only until
+ * the player answers. The answer is remembered in the same store as everything
+ * else, so a browser that fires the event on every visit still only asks once.
+ */
+createInstallPrompt({
+  button: shell.installButton,
+  dismissed: store.access('installDismissed'),
+  announce: (message) => hud.announce(message),
+});
 
 shell.playButton.addEventListener('click', primaryAction);
 shell.overlayButton.addEventListener('click', primaryAction);

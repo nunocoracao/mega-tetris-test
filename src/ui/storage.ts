@@ -64,7 +64,7 @@ export const STORAGE_KEY = 'mega-tetris:store';
  * that gets the previous version here — a store written by an older build must
  * keep working, and a player's high score is not something to shrug about.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /** Everything a player can set, as one object. */
 export interface Settings {
@@ -80,6 +80,12 @@ export interface Settings {
   readonly startLevel: number;
   /** The mode the next run is played in, from the start screen's picker. */
   readonly mode: GameMode;
+  /**
+   * The player has turned down — or completed — the offer to install the game.
+   * The offer is made once; a browser that keeps firing `beforeinstallprompt`
+   * on every visit should not keep putting a button in the footer.
+   */
+  readonly installDismissed: boolean;
 }
 
 export interface StoredData {
@@ -101,6 +107,7 @@ export function defaultSettings(): Settings {
     // Marathon is the game as it has always been, so it is what a player who
     // has never opened the picker gets.
     mode: 'marathon',
+    installDismissed: false,
   };
 }
 
@@ -149,6 +156,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     startLevel:
       typeof startLevel === 'number' ? clampStartLevel(startLevel) : defaults.startLevel,
     mode: parseGameMode(source['mode']),
+    installDismissed: flag(source['installDismissed'], defaults.installDismissed),
   };
 }
 
@@ -191,6 +199,13 @@ const MIGRATIONS: Readonly<
   // record rather than inventing history, and every best they *did* set comes
   // through untouched beside it.
   3: (data) => ({ ...data, daily: defaultDaily() }),
+
+  // 4 → 5: the game became installable, and one more settings flag came with
+  // it. Nothing moves — a version-4 store is a version-5 store with the offer
+  // still outstanding, which is exactly what the sanitiser's default says. The
+  // step exists because the table must have no gaps: a missing entry means
+  // "cannot get from there to here", and the data would be dropped.
+  4: (data) => data,
 };
 
 /** The oldest version we know how to read. Anything older is treated as this. */
