@@ -50,6 +50,8 @@ export type SoundCue =
   | 'clear'
   | 'spin'
   | 'levelUp'
+  | 'tick'
+  | 'finish'
   | 'gameOver';
 
 /**
@@ -121,6 +123,21 @@ const CUES: Readonly<Record<Exclude<SoundCue, 'clear'>, readonly ToneSpec[]>> = 
   spin: [
     { wave: 'triangle', startHz: 494, endHz: 370, delayMs: 0, durationMs: 90, gain: 0.36 },
     { wave: 'triangle', startHz: 370, endHz: 659, delayMs: 70, durationMs: 160, gain: 0.4 },
+  ],
+  // A clock, counting something down. One dry note, pitched above the move
+  // blip so it cuts through a busy board without being a new kind of sound —
+  // the same square wave the cabinet already speaks in, one octave up and gone
+  // in a twentieth of a second. It fires once per second of an Ultra's last
+  // ten, and once per line of a Sprint's last few.
+  tick: [{ wave: 'square', startHz: 784, endHz: 784, delayMs: 0, durationMs: 46, gain: 0.3 }],
+  // A run that reached its finish line rather than falling over: the level-up
+  // triad, taken further and landing an octave up. Not a fanfare — the game is
+  // over either way — but unmistakably not the cliff below.
+  finish: [
+    { wave: 'triangle', startHz: 523, endHz: 523, delayMs: 0, durationMs: 120, gain: 0.4 },
+    { wave: 'triangle', startHz: 659, endHz: 659, delayMs: 100, durationMs: 120, gain: 0.4 },
+    { wave: 'triangle', startHz: 784, endHz: 784, delayMs: 200, durationMs: 120, gain: 0.42 },
+    { wave: 'triangle', startHz: 1046, endHz: 1108, delayMs: 300, durationMs: 380, gain: 0.44 },
   ],
   // The same shape inverted and slowed down: three notes walking off a cliff.
   gameOver: [

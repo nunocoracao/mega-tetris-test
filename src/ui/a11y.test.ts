@@ -71,6 +71,18 @@ describe('the page axe sees', () => {
     expect(report(violations)).toBe('');
   });
 
+  it('has no violations with the start screen showing', async () => {
+    // The overlay is hidden in the shell as built, so its pickers would never
+    // be audited otherwise — and the mode picker is the newest thing on it.
+    shell.overlay.hidden = false;
+    shell.overlayStart.hidden = false;
+    shell.overlayHelp.hidden = false;
+
+    const violations = await audit();
+
+    expect(report(violations)).toBe('');
+  });
+
   it('has no violations with the pause menu open', async () => {
     shell.pauseDialog.hidden = false;
     for (const node of shell.background) {
@@ -170,6 +182,67 @@ describe('structure', () => {
 
     expect(terms).toContain('← / A');
     expect(terms).toContain('? / H');
+  });
+});
+
+describe('the mode picker', () => {
+  function showStartScreen(): void {
+    shell.overlay.hidden = false;
+    shell.overlayStart.hidden = false;
+  }
+
+  it('is three real buttons in a labelled group', () => {
+    expect(shell.modeButtons).toHaveLength(3);
+    for (const button of shell.modeButtons) {
+      expect(button.tagName).toBe('BUTTON');
+      expect(button.getAttribute('type')).toBe('button');
+      expect(button.textContent?.trim()).not.toBe('');
+      expect(button.closest('[role="group"]')?.getAttribute('aria-label')).toBe('Game mode');
+    }
+  });
+
+  it('says which one is chosen rather than only colouring it in', () => {
+    for (const button of shell.modeButtons) {
+      expect(button.getAttribute('aria-pressed')).toBe('false');
+    }
+    // `main.ts` publishes the stored answer into these before the first paint;
+    // what matters here is that there is somewhere for it to go.
+    expect(shell.modeButtons.every((button) => button.hasAttribute('aria-pressed'))).toBe(true);
+  });
+
+  it('joins the tab order as soon as the start screen is showing', () => {
+    showStartScreen();
+
+    const order = focusableWithin(root)
+      .filter((node) => node.closest('.modal') === null)
+      .map((node) => node.getAttribute('aria-label') ?? node.textContent?.trim() ?? '');
+
+    for (const button of shell.modeButtons) {
+      expect(order).toContain(button.textContent?.trim());
+    }
+  });
+
+  it('takes focus like any other button, with nothing done to stop it', () => {
+    showStartScreen();
+    const first = shell.modeButtons[0] as HTMLButtonElement;
+
+    first.focus();
+
+    expect(document.activeElement).toBe(first);
+    expect(first.hasAttribute('tabindex')).toBe(false);
+    expect(first.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('activates on a plain click, which is what Enter and Space produce', () => {
+    let clicks = 0;
+    const first = shell.modeButtons[0] as HTMLButtonElement;
+    first.addEventListener('click', () => {
+      clicks += 1;
+    });
+
+    first.click();
+
+    expect(clicks).toBe(1);
   });
 });
 

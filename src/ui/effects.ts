@@ -767,7 +767,10 @@ export function createEffects(options: EffectsOptions): Effects {
           bannerLevel = event.level;
           break;
 
-        case 'gameOver':
+        // However a run ended, the field settles the same way: the stack greys
+        // out from the floor up and the panel arrives behind it. What it *says*
+        // is the panel's business, not the sweep's.
+        case 'runEnd':
           sweepActive = true;
           sweepAgeMs = calm() ? Number.POSITIVE_INFINITY : 0;
           break;

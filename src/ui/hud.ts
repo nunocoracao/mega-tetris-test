@@ -8,9 +8,24 @@
  * 60Hz render loop does not rewrite identical text sixty times a second.
  */
 
-import { VISIBLE_HEIGHT, type GameEvent, type GameState } from '../engine';
+import {
+  SPRINT_GOAL_LINES,
+  VISIBLE_HEIGHT,
+  type FinishedOutcome,
+  type GameEvent,
+  type GameMode,
+  type GameState,
+} from '../engine';
 import type { PieceKind, SpinKind } from '../engine';
-import { bestFor, type Best, type RunSummary, type Stats, type StatsUpdate } from './stats';
+import {
+  MODE_HEADLINE,
+  bestFor,
+  type Best,
+  type RecordKind,
+  type RunSummary,
+  type Stats,
+  type StatsUpdate,
+} from './stats';
 import type { Shell } from './shell';
 
 /** Thousands separators, without dragging in locale differences. */
@@ -46,15 +61,57 @@ export function summaryLine(run: RunSummary): string {
   return `${lines}, level ${formatNumber(run.level)}, ${formatNumber(run.score)} points`;
 }
 
+// ---------------------------------------------------------------------------
+// Naming a mode
+// ---------------------------------------------------------------------------
+
+/** What each mode is called, everywhere it is named. */
+export const MODE_LABELS: Readonly<Record<GameMode, string>> = {
+  marathon: 'Marathon',
+  sprint: 'Sprint',
+  ultra: 'Ultra',
+};
+
+/** The one-line pitch under each name on the start screen's picker. */
+export const MODE_BLURBS: Readonly<Record<GameMode, string>> = {
+  marathon: 'Play until you top out',
+  sprint: `Clear ${SPRINT_GOAL_LINES} lines as fast as you can`,
+  ultra: 'Score as much as you can in two minutes',
+};
+
+/**
+ * Does this ladder hold a record at all?
+ *
+ * Which number answers that changes with the mode: an unplayed Sprint has no
+ * *time*, and a Sprint that was played but never finished still has none.
+ */
+export function hasBest(best: Best, mode: GameMode): boolean {
+  return MODE_HEADLINE[mode] === 'time' ? best.durationMs > 0 : best.score > 0;
+}
+
 /** A personal best in one line, for the start screen. */
-export function bestLine(best: Best): string {
+export function bestLine(best: Best, mode: GameMode): string {
+  if (MODE_HEADLINE[mode] === 'time') {
+    return `${formatDuration(best.durationMs)} for ${formatNumber(SPRINT_GOAL_LINES)} lines`;
+  }
   return `${formatNumber(best.score)} points, level ${formatNumber(best.level)}, ${formatNumber(best.lines)} lines`;
 }
 
-/** One "this run against your best" row on the game-over panel. */
+/** One "this run against your best" row on the run-summary panel. */
 export type OverlayRowKey = 'score' | 'lines' | 'level' | 'time';
 
 export const OVERLAY_ROW_KEYS: readonly OverlayRowKey[] = ['score', 'lines', 'level', 'time'];
+
+/**
+ * The order the four rows are read in, which is the mode's own order of
+ * importance: the number the mode is raced on goes first. The *set* never
+ * changes, so the shell builds all four once and the HUD reorders them.
+ */
+export function overlayRowOrder(mode: GameMode): readonly OverlayRowKey[] {
+  return MODE_HEADLINE[mode] === 'time'
+    ? ['time', 'lines', 'level', 'score']
+    : ['score', 'lines', 'level', 'time'];
+}
 
 /** The row headings. `ui/shell.ts` builds the markup from these; nothing else
  *  writes them, so the panel's labels have exactly one home. */
@@ -85,6 +142,10 @@ export type MenuStatKey =
   | 'highestLevel'
   | 'mostLines'
   | 'headStart'
+  | 'sprintBest'
+  | 'sprintHeadStart'
+  | 'ultraBest'
+  | 'ultraHeadStart'
   | 'gamesPlayed'
   | 'totalLines';
 
@@ -93,22 +154,41 @@ export const MENU_STATS: readonly { readonly key: MenuStatKey; readonly label: s
   { key: 'highestLevel', label: 'Highest level' },
   { key: 'mostLines', label: 'Most lines in a run' },
   { key: 'headStart', label: 'Best head start' },
+  { key: 'sprintBest', label: `Fastest ${SPRINT_GOAL_LINES}` },
+  { key: 'sprintHeadStart', label: `Fastest ${SPRINT_GOAL_LINES}, head start` },
+  { key: 'ultraBest', label: 'Best two minutes' },
+  { key: 'ultraHeadStart', label: 'Best two minutes, head start' },
   { key: 'gamesPlayed', label: 'Games played' },
   { key: 'totalLines', label: 'Lines all-time' },
 ];
 
 /**
  * Every row of the pause menu's list, as text. `null` means "do not show this
- * row at all" — which only the head-start best ever is, because a player who
- * has never used the level picker should not be told they have no record on a
- * ladder they have never heard of.
+ * row at all", and it is what every mode and ladder the player has not been
+ * near yet comes back as: nobody should be told they have no record in a mode
+ * they have never opened, and the same was already true of the head-start
+ * ladder before there were modes.
+ *
+ * Marathon's three rows are the exception — they are the game's headline
+ * numbers, and a zero there reads as "not yet" rather than as a mystery.
  */
 export function menuStatValues(stats: Stats): Readonly<Record<MenuStatKey, string | null>> {
+  const marathon = stats.modes.marathon;
+  const sprint = stats.modes.sprint;
+  const ultra = stats.modes.ultra;
+  const time = (best: Best): string | null =>
+    best.durationMs > 0 ? formatDuration(best.durationMs) : null;
+  const score = (best: Best): string | null => (best.score > 0 ? formatNumber(best.score) : null);
+
   return {
-    highScore: formatNumber(stats.best.score),
-    highestLevel: formatNumber(stats.best.level),
-    mostLines: formatNumber(stats.best.lines),
-    headStart: stats.headStart.score > 0 ? formatNumber(stats.headStart.score) : null,
+    highScore: formatNumber(marathon.base.score),
+    highestLevel: formatNumber(marathon.base.level),
+    mostLines: formatNumber(marathon.base.lines),
+    headStart: score(marathon.headStart),
+    sprintBest: time(sprint.base),
+    sprintHeadStart: time(sprint.headStart),
+    ultraBest: score(ultra.base),
+    ultraHeadStart: score(ultra.headStart),
     gamesPlayed: formatNumber(stats.gamesPlayed),
     totalLines: formatNumber(stats.totalLines),
   };
@@ -149,42 +229,116 @@ function bestValue(value: number): string | null {
   return value > 0 ? formatNumber(value) : null;
 }
 
-/** The four rows of the game-over panel: what you did, against what you had. */
-function resultRows(run: RunSummary, previous: Best | null, records: ReadonlySet<string>): readonly OverlayRow[] {
+/**
+ * The four rows of the run-summary panel: what you did, against what you had.
+ *
+ * Whether a row can claim a record is the mode's business, not this function's:
+ * in Marathon and Ultra a long run is not a better run, so the clock reports
+ * and never races, while in Sprint the clock is the only thing that *is* raced
+ * and the score is along for the ride. This only paints what `applyRun` decided
+ * — `recordsFor` in `ui/stats.ts` is the single home of that rule.
+ */
+function resultRows(
+  run: RunSummary,
+  previous: Best | null,
+  records: ReadonlySet<RecordKind>,
+): readonly OverlayRow[] {
   const best = previous ?? { score: 0, level: 0, lines: 0, durationMs: 0 };
   const label = (key: OverlayRowKey): string => OVERLAY_ROW_LABELS[key];
-  return [
-    {
+  const cells: Readonly<Record<OverlayRowKey, OverlayRow>> = {
+    score: {
       key: 'score',
       label: label('score'),
       value: formatNumber(run.score),
       best: bestValue(best.score),
       record: records.has('score'),
     },
-    {
+    lines: {
       key: 'lines',
       label: label('lines'),
       value: formatNumber(run.lines),
       best: bestValue(best.lines),
       record: records.has('lines'),
     },
-    {
+    level: {
       key: 'level',
       label: label('level'),
       value: formatNumber(run.level),
       best: bestValue(best.level),
       record: records.has('level'),
     },
-    {
-      // Time is shown, never raced: a long run is not a better run, so this row
-      // reports the clock and never claims a record.
+    time: {
       key: 'time',
       label: label('time'),
       value: formatDuration(run.durationMs),
       best: best.durationMs > 0 ? formatDuration(best.durationMs) : null,
-      record: false,
+      record: records.has('time'),
     },
-  ];
+  };
+  return overlayRowOrder(run.mode).map((key) => cells[key]);
+}
+
+// ---------------------------------------------------------------------------
+// How a run ended, in words
+// ---------------------------------------------------------------------------
+
+/** Everything the copy needs about a finished run. Both a `runEnd` event and a
+ *  `RunSummary` satisfy it, which is what lets one function phrase both. */
+export interface RunEndNaming {
+  readonly mode: GameMode;
+  readonly outcome: FinishedOutcome;
+  readonly score: number;
+  readonly lines: number;
+  readonly level: number;
+  readonly durationMs: number;
+}
+
+/**
+ * The panel's headline: what actually happened, not merely that it stopped.
+ *
+ * Three different endings deserve three different sentences. Marathon keeps
+ * "Game over" — it is the only mode where topping out *is* the ending rather
+ * than a failure to reach one, and it is the mode that has always said that.
+ */
+export function outcomeTitle(run: RunEndNaming): string {
+  switch (run.outcome) {
+    case 'goalReached':
+      return `${formatNumber(run.lines)} lines in ${formatDuration(run.durationMs)}`;
+    case 'timeUp':
+      return `Time up — ${formatNumber(run.score)}`;
+    case 'toppedOut':
+      return run.mode === 'marathon'
+        ? 'Game over'
+        : `Topped out on level ${formatNumber(run.level)}`;
+  }
+}
+
+/** The line under the headline: the numbers the headline did not already use. */
+export function outcomeHint(run: RunSummary): string {
+  if (run.mode !== 'sprint') {
+    return summaryLine(run);
+  }
+  return run.outcome === 'goalReached'
+    ? `Level ${formatNumber(run.level)}, ${formatNumber(run.score)} points`
+    : `${formatNumber(run.lines)} of ${formatNumber(SPRINT_GOAL_LINES)} lines — no time recorded`;
+}
+
+/**
+ * The end of a run as a spoken sentence, with no record news in it.
+ *
+ * Shared by the live region's fallback and by `describeRunEnd`, so a run only
+ * ever ends one way in words however the caller found out about it.
+ */
+export function runEndLine(run: RunEndNaming): string {
+  const lines = `${formatNumber(run.lines)} lines`;
+  switch (run.outcome) {
+    case 'goalReached':
+      return `Sprint complete. ${lines} in ${formatDuration(run.durationMs)}, ${formatNumber(run.score)} points.`;
+    case 'timeUp':
+      return `Time up. Final score ${formatNumber(run.score)}, ${lines}.`;
+    case 'toppedOut':
+      return `Game over. Final score ${formatNumber(run.score)}, ${lines}.`;
+  }
 }
 
 /**
@@ -203,8 +357,11 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
 
   switch (state.status) {
     case 'ready': {
+      const mode = state.mode;
       const best =
-        view.stats === undefined ? null : bestFor(view.stats, view.startLevel ?? state.startLevel);
+        view.stats === undefined
+          ? null
+          : bestFor(view.stats, mode, view.startLevel ?? state.startLevel);
       return {
         kind: 'start',
         eyebrow: 'Mega Tetris',
@@ -212,7 +369,10 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
         hint: controls,
         button: 'Play',
         rows: [],
-        note: best !== null && best.score > 0 ? `Your best: ${bestLine(best)}.` : null,
+        note:
+          best !== null && hasBest(best, mode)
+            ? `Your best ${MODE_LABELS[mode]}: ${bestLine(best, mode)}.`
+            : null,
         showLevelSelect: true,
         showHelp: true,
       };
@@ -236,29 +396,35 @@ export function overlayContent(state: GameState, view: OverlayView = {}): Overla
       // The result is the authority when there is one; the snapshot is the
       // fallback, so the panel is still right if the run was never recorded.
       const run: RunSummary = result?.run ?? {
+        mode: state.mode,
+        // A snapshot that is `over` and carries no outcome is not a shape the
+        // engine produces; reading it as a top-out is the safe guess.
+        outcome: state.outcome === 'none' ? 'toppedOut' : state.outcome,
         score: state.score,
         lines: state.lines,
         level: state.level,
         startLevel: state.startLevel,
         durationMs: state.elapsedMs,
       };
-      const records = new Set<string>(result?.records ?? []);
+      const records = new Set<RecordKind>(result?.records ?? []);
       const eyebrow =
         result === null || records.size === 0
           ? null
-          : result.isHighScore
-            ? 'New high score!'
+          : result.isHeadlineRecord
+            ? MODE_HEADLINE[run.mode] === 'time'
+              ? 'New best time!'
+              : 'New high score!'
             : 'New personal best!';
       return {
         kind: 'over',
         eyebrow,
-        title: 'Game over',
-        hint: summaryLine(run),
+        title: outcomeTitle(run),
+        hint: outcomeHint(run),
         button: 'Play again',
         rows: resultRows(run, result?.previousBest ?? null, records),
         note:
           result?.headStart === true
-            ? `Started on level ${formatNumber(run.startLevel)}, so it is measured against your head-start runs.`
+            ? `Started on level ${formatNumber(run.startLevel)}, so it is measured against your head-start ${MODE_LABELS[run.mode]} runs.`
             : null,
         showLevelSelect: false,
         showHelp: false,
@@ -376,8 +542,8 @@ export function describeEvent(event: GameEvent): string | null {
     }
     case 'levelUp':
       return `Level ${formatNumber(event.level)}.`;
-    case 'gameOver':
-      return `Game over. Final score ${formatNumber(event.score)}, ${formatNumber(event.lines)} lines.`;
+    case 'runEnd':
+      return runEndLine(event);
     default:
       return null;
   }
@@ -391,18 +557,67 @@ export function describeEvent(event: GameEvent): string | null {
  * record is exactly as important in the live region as it is on the panel.
  */
 export function describeRunEnd(update: StatsUpdate): string {
-  const { run } = update;
-  const base = `Game over. Final score ${formatNumber(run.score)}, ${formatNumber(run.lines)} lines.`;
-  if (update.isHighScore) {
-    return `${base} A new high score!`;
+  const { run, previousBest } = update;
+  const raced = MODE_HEADLINE[run.mode];
+  const base = runEndLine(run);
+  if (update.isHeadlineRecord) {
+    return `${base} ${raced === 'time' ? 'A new best time!' : 'A new high score!'}`;
   }
   if (update.records.length > 0) {
     return `${base} A new personal best.`;
   }
-  if (update.previousBest.score > 0) {
-    return `${base} Your best is ${formatNumber(update.previousBest.score)}.`;
+  if (raced === 'time') {
+    return previousBest.durationMs > 0
+      ? `${base} Your best is ${formatDuration(previousBest.durationMs)}.`
+      : base;
+  }
+  if (previousBest.score > 0) {
+    return `${base} Your best is ${formatNumber(previousBest.score)}.`;
   }
   return base;
+}
+
+// ---------------------------------------------------------------------------
+// The last few seconds, and the last few lines
+// ---------------------------------------------------------------------------
+
+/** How long is left of an Ultra before the run starts shouting about it. */
+export const ULTRA_WARNING_MS = 10_000;
+
+/** How many lines are left of a Sprint before the same thing happens. */
+export const SPRINT_WARNING_LINES = 5;
+
+/**
+ * How close a run is to its finish line.
+ *
+ * `urgent` is what the readout lights up on and what the audio listens for;
+ * `step` is the number that is running out — whole seconds in Ultra, lines in
+ * Sprint — so a caller can blip once per step rather than once per frame
+ * without keeping a clock of its own. Both are `null`/`false` in Marathon,
+ * which has no finish line to run out of.
+ */
+export interface RunUrgency {
+  readonly urgent: boolean;
+  readonly step: number | null;
+}
+
+const CALM: RunUrgency = { urgent: false, step: null };
+
+export function runUrgency(state: GameState): RunUrgency {
+  if (state.status !== 'playing') {
+    return CALM;
+  }
+  if (state.timeLimitMs > 0) {
+    const left = state.timeLimitMs - state.elapsedMs;
+    return left <= ULTRA_WARNING_MS
+      ? { urgent: true, step: Math.max(0, Math.ceil(left / 1000)) }
+      : CALM;
+  }
+  if (state.goalLines > 0) {
+    const left = state.goalLines - state.lines;
+    return left > 0 && left <= SPRINT_WARNING_LINES ? { urgent: true, step: left } : CALM;
+  }
+  return CALM;
 }
 
 // ---------------------------------------------------------------------------
@@ -477,10 +692,20 @@ export function describePlayfield(state: GameState, previewCount = 3): string {
           ? 'Ready to play.'
           : '';
 
+  // Marathon says nothing extra, because there is nothing extra to say: it has
+  // no finish line, and the three numbers above already are the whole state.
+  const goal =
+    state.goalLines > 0
+      ? `Sprint: ${formatNumber(Math.max(0, state.goalLines - state.lines))} lines to go, ${formatDuration(state.elapsedMs)} elapsed.`
+      : state.timeLimitMs > 0
+        ? `Ultra: ${formatDuration(Math.max(0, state.timeLimitMs - state.elapsedMs))} left.`
+        : '';
+
   return [
     `Playfield, ${state.board.width} columns wide.`,
     stack,
     `Score ${formatNumber(state.score)}, level ${formatNumber(state.level)}, ${formatNumber(state.lines)} lines cleared.`,
+    goal,
     falling,
     next,
     hold,
@@ -488,6 +713,107 @@ export function describePlayfield(state: GameState, previewCount = 3): string {
   ]
     .filter((part) => part !== '')
     .join(' ');
+}
+
+// ---------------------------------------------------------------------------
+// The readout beside the well
+// ---------------------------------------------------------------------------
+
+/** The three small rows under the big number. Their meaning moves with the
+ *  mode; their positions do not, so the shell can build them once. */
+export type ReadoutRowKey = 'best' | 'level' | 'extra';
+
+export const READOUT_ROW_KEYS: readonly ReadoutRowKey[] = ['best', 'level', 'extra'];
+
+export interface ReadoutRow {
+  readonly key: ReadoutRowKey;
+  readonly label: string;
+  readonly value: string;
+}
+
+/**
+ * One HUD, three modes.
+ *
+ * There is deliberately not a readout per mode: the panel is a heading, a big
+ * number and three labelled rows in every one of them, and all a mode does is
+ * decide what goes in each slot. Marathon leads with the score it is played
+ * for; the timed modes lead with the clock that is taking it away, and keep
+ * the number they are actually scored on in the row underneath.
+ */
+export interface HudReadout {
+  readonly title: string;
+  readonly value: string;
+  /** The big number is the score, so the count-up highlight belongs on it. */
+  readonly counting: boolean;
+  /** This run is already past the stored best on its own ladder. */
+  readonly beatingBest: boolean;
+  /** The finish line is close — see `runUrgency`. */
+  readonly urgent: boolean;
+  readonly rows: readonly ReadoutRow[];
+}
+
+export function hudReadout(state: GameState, view: HudView = {}): HudReadout {
+  const shownScore = view.score ?? state.score;
+  const best =
+    view.stats === undefined ? null : bestFor(view.stats, state.mode, state.startLevel);
+  const bestCell =
+    best === null || !hasBest(best, state.mode)
+      ? '—'
+      : MODE_HEADLINE[state.mode] === 'time'
+        ? formatDuration(best.durationMs)
+        : formatNumber(best.score);
+  const level: ReadoutRow = { key: 'level', label: 'Level', value: formatNumber(state.level) };
+  const { urgent } = runUrgency(state);
+
+  if (state.goalLines > 0) {
+    return {
+      title: 'Time',
+      value: formatDuration(state.elapsedMs),
+      counting: false,
+      // A Sprint is raced against a clock that only counts up, so "already past
+      // your best" would be true from the first second and mean nothing. The
+      // encouragement here is the lines-to-go row instead.
+      beatingBest: false,
+      urgent,
+      rows: [
+        { key: 'best', label: 'Best', value: bestCell },
+        level,
+        {
+          key: 'extra',
+          label: 'To go',
+          value: formatNumber(Math.max(0, state.goalLines - state.lines)),
+        },
+      ],
+    };
+  }
+
+  if (state.timeLimitMs > 0) {
+    return {
+      title: 'Time left',
+      value: formatDuration(Math.max(0, state.timeLimitMs - state.elapsedMs)),
+      counting: false,
+      beatingBest: state.status === 'playing' && best !== null && state.score > best.score,
+      urgent,
+      rows: [
+        { key: 'best', label: 'Best', value: bestCell },
+        level,
+        { key: 'extra', label: 'Score', value: formatNumber(shownScore) },
+      ],
+    };
+  }
+
+  return {
+    title: 'Score',
+    value: formatNumber(shownScore),
+    counting: shownScore !== state.score,
+    beatingBest: state.status === 'playing' && best !== null && state.score > best.score,
+    urgent,
+    rows: [
+      { key: 'best', label: 'Best', value: bestCell },
+      level,
+      { key: 'extra', label: 'Lines', value: formatNumber(state.lines) },
+    ],
+  };
 }
 
 /** The things the HUD cannot read off the snapshot. */
@@ -553,6 +879,17 @@ export function createHud(shell: Shell): Hud {
     }
   }
 
+  /** The same trick for the readout beside the well. */
+  const readoutNodes = new Map<ReadoutRowKey, { row: HTMLElement; label: HTMLElement; value: HTMLElement }>();
+  for (const key of READOUT_ROW_KEYS) {
+    const row = shell.readoutRows.querySelector<HTMLElement>(`[data-readout-row="${key}"]`);
+    const label = shell.readoutRows.querySelector<HTMLElement>(`[data-readout-label="${key}"]`);
+    const value = shell.readoutRows.querySelector<HTMLElement>(`[data-readout-value="${key}"]`);
+    if (row !== null && label !== null && value !== null) {
+      readoutNodes.set(key, { row, label, value });
+    }
+  }
+
   /**
    * What the overlay last said, so identical copy is not rewritten per frame.
    *
@@ -588,6 +925,10 @@ export function createHud(shell: Shell): Hud {
       }
       setText(nodes.value, row.best === null ? row.value : `${row.value} (best ${row.best})`);
       nodes.row.classList.toggle('runstats__row--record', row.record);
+      // The mode decides the reading order — Sprint's clock belongs at the top
+      // — so the rows are re-appended in the order the content asks for. Four
+      // moves, and only when the panel's copy has actually changed.
+      shell.overlayRows.append(nodes.row);
     }
 
     setHidden(shell.overlayStart, !content.showLevelSelect);
@@ -613,6 +954,10 @@ export function createHud(shell: Shell): Hud {
       state.holdLocked ? 'x' : '-',
       state.active?.kind ?? '-',
       state.next.slice(0, 3).join(''),
+      // The clock only reaches the description in the timed modes, and only to
+      // the second — a signature that moved every frame would rebuild the
+      // sentence every frame, which is the whole thing this exists to avoid.
+      state.goalLines > 0 || state.timeLimitMs > 0 ? Math.floor(state.elapsedMs / 1000) : 0,
     ].join('|');
     if (signature === summarySignature) {
       return;
@@ -625,25 +970,35 @@ export function createHud(shell: Shell): Hud {
 
   return {
     render(state: GameState, view: HudView = {}): void {
-      const shown = view.score ?? state.score;
-      setText(shell.score, formatNumber(shown));
+      // One readout, parameterised by the mode: the heading, the big number and
+      // the three rows all come out of the same pure function.
+      const readout = hudReadout(state, view);
+      setText(shell.readoutTitle, readout.title);
+      setText(shell.score, readout.value);
       // Lit while the counter is still catching up — the readout's own little
       // "something just happened", and free of any animation of its own.
-      shell.score.classList.toggle('score--counting', shown !== state.score);
-      setText(shell.level, formatNumber(state.level));
-      setText(shell.lines, formatNumber(state.lines));
+      shell.score.classList.toggle('score--counting', readout.counting);
+      // Lit, and in a warmer colour, over the last ten seconds of an Ultra and
+      // the last few lines of a Sprint. The stylesheet only animates it when
+      // movement is wanted.
+      shell.score.classList.toggle('score--urgent', readout.urgent);
+      for (const row of readout.rows) {
+        const nodes = readoutNodes.get(row.key);
+        if (nodes === undefined) {
+          continue;
+        }
+        setText(nodes.label, row.label);
+        setText(nodes.value, row.value);
+      }
       setText(shell.playButton, playButtonLabel(state));
       refreshSummary(state);
 
-      // The best on this run's own ladder, and a quiet flag while the run in
-      // progress is already past it. A record you are *setting* is worth more
-      // encouragement than one you set last week.
-      const best = view.stats === undefined ? 0 : bestFor(view.stats, state.startLevel).score;
-      setText(shell.best, best > 0 ? formatNumber(best) : '—');
-      shell.bestRow.classList.toggle(
-        'stats__row--record',
-        state.status === 'playing' && state.score > best,
-      );
+      // A quiet flag while the run in progress is already past the best on its
+      // own ladder. A record you are *setting* is worth more encouragement than
+      // one you set last week.
+      readoutNodes
+        .get('best')
+        ?.row.classList.toggle('stats__row--record', readout.beatingBest);
 
       // The 3-2-1 after a pause. `aria-hidden`, because the live region has
       // already said "Paused" and will say "Resumed" — counting out loud on

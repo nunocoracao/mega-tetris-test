@@ -168,6 +168,12 @@ const TEXT_PAIRS: readonly Pair[] = [
   { what: 'quiet buttons under the marquee light', fg: '--fg-muted', bg: '--cabinet-lit' },
   { what: 'quiet buttons on a dialog panel', fg: '--fg-muted', bg: '--panel-hover' },
   { what: 'the score readout on a panel', fg: '--accent', bg: '--panel' },
+  // The last ten seconds of an Ultra, and the last few lines of a Sprint. It
+  // has to clear AA on its own, because a player who has asked for stillness
+  // gets the colour with no pulse under it.
+  { what: 'the urgent readout on a panel', fg: '--accent-2', bg: '--panel' },
+  { what: 'a mode blurb on its own button', fg: '--fg-muted', bg: '--panel-hover' },
+  { what: 'the chosen mode’s name on its button', fg: '--accent', bg: '--panel-hover' },
   { what: 'the reset confirmation on its inset', fg: '--fg', bg: '--panel-canvas' },
   { what: 'keycap letters on their cap', fg: '--accent', bg: '--cabinet' },
   { what: 'dialog titles on a dialog panel', fg: '--accent', bg: '--panel-hover' },
@@ -196,6 +202,8 @@ const UI_PAIRS: readonly Pair[] = [
   { what: 'a control border against its own fill', fg: '--edge', bg: '--panel-hover' },
   { what: 'a control border against a panel', fg: '--edge', bg: '--panel' },
   { what: 'the level picker against its own fill', fg: '--edge', bg: '--panel' },
+  { what: 'an unchosen mode button against its own fill', fg: '--edge', bg: '--panel' },
+  { what: 'the chosen mode’s border against its own fill', fg: '--accent', bg: '--panel-hover' },
   { what: 'the reset confirmation border on its inset', fg: '--edge', bg: '--panel-canvas' },
   { what: 'a keycap border against its cap', fg: '--edge', bg: '--cabinet' },
   { what: 'the well frame against the well', fg: '--field-frame', bg: '--well' },

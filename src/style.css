@@ -559,11 +559,73 @@ body {
   color: var(--accent-lit);
 }
 
-/* ------------------------------------------------------- the level picker -- */
+/* -------------------------------------------------- the mode and level pickers -- */
 
 .overlay__start {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+/*
+ * The mode picker: three real buttons, stacked so the blurb under each name has
+ * a line of its own to sit on. A grid rather than a flex column so all three
+ * caps are the width of the widest, which is what stops the group looking like
+ * a ragged list of links.
+ */
+.modes {
+  display: grid;
+  gap: 0.3rem;
+  width: min(17rem, 100%);
+}
+
+.mode {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  /* Comfortably past the 44px minimum on the axis a thumb has to hit. */
+  min-height: 2.75rem;
+  padding: 0.4rem 0.7rem;
+  border: var(--control-border-width) solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--fg);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.mode:hover {
+  background: var(--panel-hover);
+}
+
+/*
+ * The chosen one. `aria-pressed` is what actually carries the choice, so the
+ * selector reads off it rather than off a class the DOM could disagree with —
+ * and the marker is a thicker border plus a lit name, never colour alone.
+ */
+.mode[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--panel-hover);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.mode__name {
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.mode[aria-pressed='true'] .mode__name {
+  color: var(--accent);
+}
+
+.mode__blurb {
+  font-size: 0.68rem;
+  color: var(--fg-muted);
 }
 
 .level {
@@ -662,6 +724,31 @@ body {
 .score--counting {
   color: var(--accent-lit);
   text-shadow: 0 0 0.75rem var(--glow);
+}
+
+/*
+ * The last ten seconds of an Ultra, and the last few lines of a Sprint.
+ *
+ * A colour first and a pulse second, in that order of importance: the pink end
+ * of the palette clears AA against the panel on its own, so a player who has
+ * asked for stillness loses only the movement and keeps the whole tell. The
+ * pulse is one second long, which is the same beat the audible tick keeps.
+ */
+.score--urgent {
+  color: var(--accent-2);
+  text-shadow: 0 0 0.75rem var(--glow);
+  animation: readout-pulse 1s ease-in-out infinite;
+}
+
+@keyframes readout-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.62;
+  }
 }
 
 .stats {
@@ -1550,7 +1637,8 @@ body {
     transform: none;
   }
 
-  :root:not([data-motion='full']) .overlay[data-state='over'] {
+  :root:not([data-motion='full']) .overlay[data-state='over'],
+  :root:not([data-motion='full']) .score--urgent {
     animation: none;
   }
 }
@@ -1565,6 +1653,7 @@ body {
   transform: none;
 }
 
-:root[data-motion='reduced'] .overlay[data-state='over'] {
+:root[data-motion='reduced'] .overlay[data-state='over'],
+:root[data-motion='reduced'] .score--urgent {
   animation: none;
 }

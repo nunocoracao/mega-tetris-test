@@ -2,7 +2,7 @@
 
 A cheerful falling-block puzzle game that lives entirely in the browser — a
 tiny arcade cabinet at a URL. No backend, no accounts, no install: three static
-files totalling **31 KB gzipped**, and you are playing.
+files totalling **33 KB gzipped**, and you are playing.
 
 **▶ [Play it](https://nunocoracao.github.io/mega-tetris-test/)**
 
@@ -17,6 +17,9 @@ browser.
   five-deep preview, lock delay with a reset cap, levels that speed up, spins,
   combos, a back-to-back chain, and a seeded piece stream that makes every run
   reproducible.
+- **Three ways to play.** Marathon until you top out, Sprint for the fastest 40
+  lines, Ultra for the highest score in two minutes — the same game with a
+  different finish line, each with its own record book. See [Modes](#modes).
 - **Plays with a thumb.** Gestures over the well *and* a seven-button on-screen
   pad, both producing exactly the actions the keyboard does.
 - **Feels like something.** Line clears flash and throw shards in their own
@@ -63,6 +66,50 @@ reported but not gated; see [Testing](#testing) for why.
 
 `vite.config.ts` sets `base: './'`, so the contents of `dist/` work from any
 static host and from any subdirectory path.
+
+## Modes
+
+The rules never change between modes: same gravity curve, same scoring, same
+levels every ten lines. All a mode decides is when the run stops and what the
+result is called.
+
+| Mode         | Ends when                        | The result is | Beaten by     |
+| ------------ | -------------------------------- | ------------- | ------------- |
+| **Marathon** | You top out. *(the default)*     | A score       | A higher one  |
+| **Sprint**   | The 40th line clears             | A time        | A **lower** one |
+| **Ultra**    | Two minutes are up               | A score       | A higher one  |
+
+Pick one on the start screen — three buttons beside the level picker, and the
+choice is remembered between visits. `Restart` keeps the mode you are in;
+changing it is a fresh game.
+
+Every run ends with a `runEnd` carrying an **outcome**, and the panel says what
+actually happened rather than only that it stopped:
+
+| Outcome       | What it means                       | The panel says          |
+| ------------- | ----------------------------------- | ----------------------- |
+| `toppedOut`   | A piece had nowhere to spawn        | *Topped out on level 6* |
+| `goalReached` | Sprint met its line goal            | *40 lines in 1:42*      |
+| `timeUp`      | Ultra's clock ran out               | *Time up — 8,400*       |
+
+A Sprint that tops out before 40 lines is a **did-not-finish**: it counts in
+your games played and your lifetime lines, and it sets no time, however quickly
+it fell over. Nothing else in the game distinguishes losing from stopping, and
+this is the one place where it matters.
+
+The readout beside the well follows the mode — Marathon leads with the score,
+Sprint with a clock counting up and the lines still to go, Ultra with a clock
+counting down and the score beside it. It is one HUD parameterised three ways,
+not three HUDs. Over the last ten seconds of an Ultra and the last five lines
+of a Sprint the readout turns pink and pulses, and a dry tick counts each step
+out loud; with reduced motion the colour and the tick stay and only the pulse
+goes.
+
+Both timed modes end **at the deadline, not at the end of the frame that
+crossed it**. `update` consumes its delta in slices bounded by the finish line
+along with every other timer, so a 100 ms frame stops an Ultra on 120000 ms
+exactly, and a Sprint's clock is the clock as it stood on the fortieth line —
+not after the line-clear pause that would have followed.
 
 ## Controls
 
@@ -131,13 +178,15 @@ the pause menu cycles auto → on → off.
 | Rule       | Behaviour                                                            |
 | ---------- | -------------------------------------------------------------------- |
 | Gravity    | `800ms × 0.85^(level−1)` per row, floored at `50ms` from level 18 on. |
-| Levels     | One level per 10 lines cleared.                                       |
+| Levels     | One level per 10 lines cleared, in every mode.                        |
 | Lock delay | `500ms` once resting, refreshed by a move or rotation, 15 times max.  |
 | Hold       | Swaps the active piece and resets it to spawn; locked until the next piece commits. |
 | Spin       | The last thing that moved the piece was a rotation, **and** it can no longer go left, right or down. Any piece kind; a turn that needed a wall kick is paid from the cheaper column. |
 | Combo      | Consecutive locks that each clear at least one row. `50 × combo × level` from the second clear onwards; a lock that clears nothing resets it. |
 | Back to back | A quad or a spin clear straight after another one scores **1.5×** its base, rounded down. Any plain 1–3 line clear breaks the chain; a lock that clears nothing leaves it alone. |
 | Game over  | A newly spawned piece has nowhere to sit.                             |
+| Sprint     | Ends the instant the 40th line clears. A top-out first is a did-not-finish and records no time. |
+| Ultra      | Ends at exactly 120000 ms of play, evaluated at the deadline rather than at the end of the frame. |
 
 The help panel builds both of these tables from the engine's own constants, so
 retuning a score changes the help text with it.
@@ -197,14 +246,14 @@ asserted.
 
 The production build is three files and no runtime dependencies:
 
-| File         | Raw     | Gzipped     |
-| ------------ | ------- | ----------- |
-| `index.js`   | 74.0 KB | **25.7 KB** |
-| `index.css`  | 18.9 KB | **4.4 KB**  |
-| `index.html` | 1.5 KB  | **0.7 KB**  |
-| **Total**    | 94.4 KB | **30.8 KB** |
+| File         | Raw      | Gzipped     |
+| ------------ | -------- | ----------- |
+| `index.js`   | 80.6 KB  | **27.7 KB** |
+| `index.css`  | 19.9 KB  | **4.6 KB**  |
+| `index.html` | 1.5 KB   | **0.7 KB**  |
+| **Total**    | 102.1 KB | **33.0 KB** |
 
-JS + CSS is **30.1 KB gzipped**, against a budget of 100 KB. There is nothing
+JS + CSS is **32.2 KB gzipped**, against a budget of 100 KB. There is nothing
 else to fetch: the favicon is an inline SVG data URI, there are no web fonts,
 no images and no audio files. Re-measure with `npm run build` — Vite prints the
 gzipped figure for every asset.
@@ -255,7 +304,7 @@ file for `Math.random`, `Date.now`, `performance.now`, DOM globals and
 ### Events drive the effects, and nothing flows back
 
 Each snapshot carries `events` — `spawn`, `lock`, `hardDrop`, `spin`,
-`rowsCleared`, `levelUp`, `hold`, `gameOver` — describing only what happened
+`rowsCleared`, `levelUp`, `hold`, `runEnd` — describing only what happened
 during the call that produced it, in game terms with no colours, durations or
 sounds in them. `rowsCleared` says how many rows went, whether it was a spin,
 how long the combo and back-to-back chains are, and what it was worth; it does
@@ -271,7 +320,8 @@ one job: `renderer.ts` paints a `GameState`, `palette.ts` reads every colour out
 of the stylesheet, `input.ts` and `touch.ts` report intents, `loop.ts` times
 frames, `shell.ts` builds the DOM, `hud.ts` writes the readouts, `dialog.ts` is
 the modal machinery, `storage.ts` is the only file that touches `localStorage`,
-and `stats.ts` is the only place a personal best is decided. `hud.ts` is also
+and `stats.ts` is the only place a personal best is decided — including what
+"best" even means in a mode raced on a clock. `hud.ts` is also
 the only place a clear gets a *name* — "T-spin double", "combo ×4" — which is
 why `effects.ts` imports it for its floating labels rather than writing its own.
 
@@ -299,7 +349,7 @@ duplicate.
 
 ## Testing
 
-Around 600 tests, in about three seconds.
+Around 680 tests, in about three seconds.
 
 The engine carries a coverage floor because it is the part that must not rot.
 The browser layer does not, deliberately: the tests there cover the **pure**
@@ -310,10 +360,12 @@ a coverage number through the canvas would buy brittle tests rather than
 confidence.
 
 Two files run in jsdom rather than Node: `src/ui/a11y.test.ts` runs axe-core
-over the real shell three times (dialogs closed, pause menu open, help panel
-open) and then checks the things a static audit cannot see — focus moving in
-and back out, `Tab` wrapping, `Escape` not reaching the game underneath, the
-background going `inert`. Everything else runs in `node`, which is what stops a
+over the real shell four times (dialogs closed, the start screen and its two
+pickers showing, pause menu open, help panel open) and then checks the things a
+static audit cannot see — focus moving in and back out, `Tab` wrapping,
+`Escape` not reaching the game underneath, the background going `inert`, and
+the mode picker being three real buttons that take focus and say which one is
+chosen. Everything else runs in `node`, which is what stops a
 DOM reference sneaking into the engine.
 
 ### Playtesting
@@ -333,9 +385,10 @@ level 10, both with hard drops and with gravity alone; rotation against both
 walls, on the floor and in a one-column well; hold spam, pause spam, restart
 mid-animation and hard drop into a game over; input hammered through the
 line-clear pause; a direction held into a wall for seconds; resize and
-orientation changes mid-game; backgrounding the tab; and a layout measurement
-at ten viewport sizes checking for page scroll, overlapping bands and a
-playable cell size.
+orientation changes mid-game; backgrounding the tab; a full two-minute Ultra
+run checked to stop on 120000 ms exactly with the last ten seconds lit; a
+Sprint played to a did-not-finish; and a layout measurement at ten viewport
+sizes checking for page scroll, overlapping bands and a playable cell size.
 
 ## Contributing
 

@@ -55,11 +55,15 @@ export {
 
 export type {
   ActionKind,
+  FinishedOutcome,
   GameEvent,
   GameInput,
+  GameMode,
   GameOptions,
   GameState,
   GameStatus,
+  ModeRules,
+  RunOutcome,
   SpinKind,
 } from './game';
 export {
@@ -70,9 +74,14 @@ export {
   gravityIntervalMs,
   isResting,
   levelForLines,
+  parseGameMode,
   spinKind,
   spinTable,
   update,
+  GAME_MODES,
+  MODE_RULES,
+  SPRINT_GOAL_LINES,
+  ULTRA_TIME_LIMIT_MS,
   BACK_TO_BACK_MULTIPLIER,
   COMBO_POINTS,
   DEFAULT_SEED,

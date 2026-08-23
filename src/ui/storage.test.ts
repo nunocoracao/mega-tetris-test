@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { defaultStats, type RunSummary } from './stats';
+import { defaultStats, emptyModeBests, type Best, type RunSummary, type Stats } from './stats';
 import {
   LEGACY_KEYS,
   detectStorageArea,
@@ -69,7 +69,36 @@ function readOnlyArea(entries: Readonly<Record<string, string>> = {}): StorageAr
 }
 
 function run(overrides: Partial<RunSummary> = {}): RunSummary {
-  return { score: 4200, lines: 12, level: 3, startLevel: 1, durationMs: 61_000, ...overrides };
+  return {
+    mode: 'marathon',
+    outcome: 'toppedOut',
+    score: 4200,
+    lines: 12,
+    level: 3,
+    startLevel: 1,
+    durationMs: 61_000,
+    ...overrides,
+  };
+}
+
+/** Marathon's honest ladder, which is where an unqualified `run` lands. */
+function marathonBest(stats: Stats): Best {
+  return stats.modes.marathon.base;
+}
+
+/** A version-2 store, as the build before modes actually wrote one. */
+function version2(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    version: 2,
+    settings: { sound: false, motion: 'reduced', contrast: 'more', pad: 'off', seenHelp: true, startLevel: 4 },
+    stats: {
+      best: { score: 12_345, level: 9, lines: 88, durationMs: 400_000 },
+      headStart: { score: 6_000, level: 14, lines: 40, durationMs: 120_000 },
+      gamesPlayed: 37,
+      totalLines: 512,
+    },
+    ...overrides,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -92,7 +121,7 @@ describe('a store with nowhere to keep anything', () => {
     expect(() => store.set('sound', false)).not.toThrow();
     expect(store.get('sound')).toBe(false);
     expect(() => store.recordRun(run())).not.toThrow();
-    expect(store.stats().best.score).toBe(4200);
+    expect(marathonBest(store.stats()).score).toBe(4200);
   });
 
   it('keeps working when reads succeed but writes are refused', () => {
@@ -126,7 +155,7 @@ describe('a store over a corrupt value', () => {
       [STORAGE_KEY]: JSON.stringify({
         version: SCHEMA_VERSION,
         settings: { sound: 'yes', motion: 'sideways', contrast: 'more', startLevel: 400 },
-        stats: { best: { score: 900 }, gamesPlayed: 'lots' },
+        stats: { modes: { marathon: { base: { score: 900 } } }, gamesPlayed: 'lots' },
       }),
     });
     const store = createStore({ area });
@@ -135,7 +164,7 @@ describe('a store over a corrupt value', () => {
     expect(store.get('motion')).toBe('auto'); // not a motion setting
     expect(store.get('contrast')).toBe('more'); // this one was fine
     expect(store.get('startLevel')).toBe(10); // clamped, not discarded
-    expect(store.stats().best.score).toBe(900);
+    expect(marathonBest(store.stats()).score).toBe(900);
     expect(store.stats().gamesPlayed).toBe(0);
   });
 
@@ -161,6 +190,7 @@ describe('round tripping', () => {
     first.set('pad', 'on');
     first.set('seenHelp', true);
     first.set('startLevel', 6);
+    first.set('mode', 'sprint');
     first.recordRun(run({ score: 7777, lines: 30, level: 4 }));
 
     const second = createStore({ area });
@@ -172,8 +202,9 @@ describe('round tripping', () => {
       pad: 'on',
       seenHelp: true,
       startLevel: 6,
+      mode: 'sprint',
     });
-    expect(second.stats().best).toEqual({
+    expect(marathonBest(second.stats())).toEqual({
       score: 7777,
       level: 4,
       lines: 30,
@@ -233,8 +264,62 @@ describe('migration', () => {
       pad: 'off',
       seenHelp: true,
       startLevel: 1,
+      mode: 'marathon',
     });
     expect(migrated.stats).toEqual(defaultStats());
+  });
+
+  it('carries a version 2 store forward without losing a single number', () => {
+    // The build before modes stored one game's records under `best` and
+    // `headStart`. Every one of them belongs to Marathon, on the ladder it was
+    // set on, and a player who comes back to this build must still have them.
+    const migrated = migrate(version2());
+
+    expect(migrated.version).toBe(SCHEMA_VERSION);
+    expect(migrated.stats.modes.marathon.base).toEqual({
+      score: 12_345,
+      level: 9,
+      lines: 88,
+      durationMs: 400_000,
+    });
+    expect(migrated.stats.modes.marathon.headStart).toEqual({
+      score: 6_000,
+      level: 14,
+      lines: 40,
+      durationMs: 120_000,
+    });
+    expect(migrated.stats.gamesPlayed).toBe(37);
+    expect(migrated.stats.totalLines).toBe(512);
+    // The modes it had never heard of start empty rather than inheriting.
+    expect(migrated.stats.modes.sprint).toEqual(emptyModeBests());
+    expect(migrated.stats.modes.ultra).toEqual(emptyModeBests());
+  });
+
+  it('keeps a version 2 store’s settings, and defaults the one it lacks', () => {
+    const migrated = migrate(version2());
+
+    expect(migrated.settings).toEqual({
+      sound: false,
+      motion: 'reduced',
+      contrast: 'more',
+      pad: 'off',
+      seenHelp: true,
+      startLevel: 4,
+      mode: 'marathon',
+    });
+  });
+
+  it('loads a version 2 store through `createStore` and keeps its bests', () => {
+    const area = memoryArea({ [STORAGE_KEY]: JSON.stringify(version2()) });
+
+    const store = createStore({ area });
+
+    expect(marathonBest(store.stats()).score).toBe(12_345);
+    expect(store.get('startLevel')).toBe(4);
+    expect(store.get('mode')).toBe('marathon');
+    // And it is rewritten in the current shape, so the next load has no work.
+    expect(JSON.parse(area.map.get(STORAGE_KEY) as string).version).toBe(SCHEMA_VERSION);
+    expect(marathonBest(createStore({ area }).stats()).score).toBe(12_345);
   });
 
   it('treats a missing version as the oldest one we know how to read', () => {
@@ -251,12 +336,12 @@ describe('migration', () => {
     const migrated = migrate({
       version: SCHEMA_VERSION + 5,
       settings: { contrast: 'more', somethingNew: 'shiny' },
-      stats: { best: { score: 12_345, level: 9, lines: 88, durationMs: 400_000 } },
+      stats: { modes: { marathon: { base: { score: 12_345, level: 9, lines: 88, durationMs: 400_000 } } } },
     });
 
     expect(migrated.version).toBe(SCHEMA_VERSION);
     expect(migrated.settings.contrast).toBe('more');
-    expect(migrated.stats.best.score).toBe(12_345);
+    expect(marathonBest(migrated.stats).score).toBe(12_345);
   });
 
   it('turns rubbish into the defaults rather than throwing', () => {
@@ -312,6 +397,7 @@ describe('the loose keys of the ad-hoc era', () => {
       pad: 'on',
       seenHelp: true,
       startLevel: 1,
+      mode: 'marathon',
     });
     for (const key of Object.values(LEGACY_KEYS)) {
       expect(area.map.has(key), `${key} was left behind`).toBe(false);
